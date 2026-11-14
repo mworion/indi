@@ -31,6 +31,8 @@
  *
  */
 
+/// The transformations are based on the paper "Matrix Method for Coordinates Transformation" written by Toshimi Taki
+
 #pragma once
 
 #include <stdint.h>
@@ -39,7 +41,7 @@
 
 #include <indicom.h>
 
-static char device_str[64] = "Telescope Simulator";
+extern char device_str[64];
 
 ///
 /// \brief The Angle class
@@ -256,7 +258,10 @@ class Angle
 /// Implements a generic Axis which can be used for equatorial or AltAz mounts for both axes.
 ///
 /// For an equatorial mount use the TrackRate to set the standard tracking rates. for the primary axis only.
+/// (TS 5.25: Axis entails the angles of the rotation around the mechanical axes of the mount.)
 /// For an AltAz mount the TrackingRateDegSec rate must be set for both axes.
+/// (TS 5.25: The tracking rates of the mechanical axes vary with the positions.
+/// See "Deriving Field Rotation Rate for an Alt-Az Mounted Telescope" by Russell P. Patera1)
 ///
 class Axis
 {
@@ -277,7 +282,7 @@ class Axis
         void setDegrees(double degrees);
         void setHours(double hours);
 
-        Angle position;         // current axis position
+        Angle position; // current angle of the telescope position about axis
 
         void StartSlew(Angle angle);
 
@@ -288,7 +293,7 @@ class Axis
             guideDuration = 0;
         }
 
-        bool isSlewing;
+        bool isSlewing = false;
 
         bool isTracking()
         {
@@ -311,6 +316,8 @@ class Axis
         ///
         AXIS_TRACK_RATE TrackRate();
 
+        double getTrackingRateDegSec();
+
         ///
         /// \brief TrackingRateDegSec
         ///
@@ -328,7 +335,7 @@ class Axis
             return guideDuration > 0;
         }
 
-        int mcRate;             // int -4 to 4 sets move rate, zero is stopped
+        int mcRate = 0;             // int -4 to 4 sets move rate, zero is stopped
 
         void update();         // called about once a second to update the position and mode
 
@@ -346,13 +353,13 @@ class Axis
             0, 0
         };
 
-        bool tracking;      // this allows the tracking state and rate to be set independently
+        bool tracking = false;      // this allows the tracking state and rate to be set independently
 
         AXIS_TRACK_RATE trackingRate { AXIS_TRACK_RATE::OFF };
 
         Angle rotateCentre { 90.0 };
 
-        double guideDuration;
+        double guideDuration = 0;
         Angle guideRateDegSec;
 
         // rates are angles in degrees per second derived from the values in indicom.h
@@ -394,7 +401,7 @@ class Axis
 ///  Observed Place  These are the mount coordinates for a perfect mount, positions are observedHa and observedDec
 ///     apply telescope pointing corrections
 ///  Instrument Place these are the mount coordinates for the mount with corrections, values are instrumentHa and instrumentDec
-///     for a  GEM convert to axis cooordinates ( this isn't in the paper).
+///     for a  GEM convert to axis coordinates ( this isn't in the paper).
 ///  Mount Place these give primary (ha) and secondary (dec) positions
 ///
 /// At present AltAz mounts are not implemented
@@ -434,6 +441,10 @@ class Alignment
         /// \param me
         ///
         void setCorrections(double ih, double id, double ch, double np, double ma, double me);
+        void setCorrections(double *coeffs)
+        {
+            setCorrections(coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4], coeffs[5]);
+        }
 
         void setFlipHourAngle(double deg)
         {
@@ -486,6 +497,17 @@ class Alignment
         void mountToApparentHaDec(Angle primary, Angle secondary, Angle *apparentHa, Angle *apparentDec);
 
         ///
+        /// \brief mountToInstrumentHaDec: convert mount axis positions to instrument (encoder) HA/Dec
+        /// without applying the Wallace pointing-model corrections.
+        ///
+        void mountToInstrumentHaDec(Angle primary, Angle secondary, Angle *instrumentHa, Angle *instrumentDec);
+
+        // Inverse of mountToInstrumentHaDec: converts raw instrument HA/Dec (no Wallace) to
+        // axis positions.  Uses the same flipHourAngle condition as apparentHaDecToMount so
+        // it selects the correct pier side for a Goto without applying pointing corrections.
+        void instrumentHaDecToMount(Angle instrumentHa, Angle instrumentDec, Angle *primary, Angle *secondary);
+
+        ///
         /// \brief apparentHaDecToMount
         /// \param ha
         /// \param apparentDec
@@ -494,6 +516,9 @@ class Alignment
         ///
         void apparentHaDecToMount(Angle apparentHa, Angle apparentDec, Angle *primary, Angle *secondary);
 
+        // days to add to the system clock: follows the client's TIME_UTC, 0 is the system clock
+        double clockOffsetDays = 0;
+        double julianDate();    // returns the Julian date of the simulated clock
         Angle lst();            // returns the current LST as an angle
     private:
 
@@ -583,7 +608,7 @@ class Vector
         Vector(double l, double m, double n);
 
         ///
-        /// \brief Vector creats a vector from two angles (Ra, Dec), (Ha, Dec), (Azimuth, Altitude)
+        /// \brief Vector creates a vector from two angles (Ra, Dec), (Ha, Dec), (Azimuth, Altitude)
         /// \param primary
         /// \param secondary
         ///

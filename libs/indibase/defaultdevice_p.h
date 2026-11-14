@@ -18,12 +18,14 @@
 
 #pragma once
 
-#include "basedevice_p.h"
+#include "parentdevice_p.h"
 #include "defaultdevice.h"
+#include "watchdeviceproperty.h"
 
 #include <cstring>
 #include <list>
 #include <mutex>
+#include <string>
 
 #include "indipropertyswitch.h"
 #include "indipropertynumber.h"
@@ -32,7 +34,7 @@
 
 namespace INDI
 {
-class DefaultDevicePrivate: public BaseDevicePrivate
+class DefaultDevicePrivate: public ParentDevicePrivate
 {
     public:
         DefaultDevicePrivate(DefaultDevice *defaultDevice);
@@ -48,7 +50,6 @@ class DefaultDevicePrivate: public BaseDevicePrivate
 
         uint16_t majorVersion { 1 };
         uint16_t minorVersion { 0 };
-        uint16_t interfaceDescriptor { 0 };
         int m_ConfigConnectionMode {-1};
 
         PropertySwitch SimulationSP     { 2 };
@@ -58,6 +59,7 @@ class DefaultDevicePrivate: public BaseDevicePrivate
         PropertyNumber PollPeriodNP     { 1 };
         PropertyText   DriverInfoTP     { 4 };
         PropertySwitch ConnectionModeSP { 0 }; // dynamic count of switches
+        PropertyText   NicknameTP       { 1 };
 
         std::vector<Connection::Interface *> connections;
         Connection::Interface *activeConnection = nullptr;
@@ -76,6 +78,15 @@ class DefaultDevicePrivate: public BaseDevicePrivate
     public:
         static std::list<DefaultDevicePrivate*> devices;
         static std::recursive_mutex             devicesLock;
+
+        WatchDeviceProperty watchDevice;
+
+        int loadINDINicknamesXML(const char *devicename);
+        int saveINDINicknamesXML(const char *devicename);
+
+        bool nicknamesLoaded{false};
+        std::string deviceNickname{};
+        std::map<std::string, std::string> nicknameMap{};
 };
 
 }

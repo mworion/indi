@@ -90,6 +90,9 @@ class IOptronV3 : public INDI::Telescope, public INDI::GuiderInterface
         virtual IPState GuideEast(uint32_t ms) override;
         virtual IPState GuideWest(uint32_t ms) override;
 
+        // Homing
+        virtual IPState ExecuteHomeAction(TelescopeHomeAction action) override;
+
     private:
         /**
             * @brief getStartupData Get initial mount info on startup.
@@ -130,10 +133,6 @@ class IOptronV3 : public INDI::Telescope, public INDI::GuiderInterface
         ISwitch HemisphereS[2];
         ISwitchVectorProperty HemisphereSP;
 
-        /* Home Control */
-        ISwitch HomeS[3];
-        ISwitchVectorProperty HomeSP;
-
         /* Guide Rate */
         INumber GuideRateN[2];
         INumberVectorProperty GuideRateNP;
@@ -151,17 +150,15 @@ class IOptronV3 : public INDI::Telescope, public INDI::GuiderInterface
         ISwitchVectorProperty DaylightSP;
 
         // Meridian Behavior
-        ISwitch MeridianActionS[2];
-        ISwitchVectorProperty MeridianActionSP;
+        INDI::PropertySwitch MeridianActionSP {2};
 
         // Meridian Limit
-        INumber MeridianLimitN[1];
-        INumberVectorProperty MeridianLimitNP;
+        INDI::PropertyNumber MeridianLimitNP {1};
 
         uint32_t DBG_SCOPE;
 
-        double currentRA, currentDEC;
-        double targetRA, targetDEC;
+        double currentRA {0}, currentDEC {0};
+        double targetRA {0}, targetDEC {0};
 
         IOPv3::IOPInfo scopeInfo;
         IOPv3::FirmwareInfo firmwareInfo;

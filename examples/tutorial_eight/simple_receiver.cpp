@@ -34,7 +34,7 @@ std::unique_ptr<SimpleReceiver> simpleReceiver(new SimpleReceiver());
 ***************************************************************************************/
 bool SimpleReceiver::Connect()
 {
-    IDMessage(getDeviceName(), "Simple Receiver connected successfully!");
+    LOG_INFO("Simple Receiver connected successfully!");
 
     // Let's set a timer that checks teleReceivers status every POLLMS milliseconds.
     SetTimer(getCurrentPollingPeriod());
@@ -47,7 +47,7 @@ bool SimpleReceiver::Connect()
 ***************************************************************************************/
 bool SimpleReceiver::Disconnect()
 {
-    IDMessage(getDeviceName(), "Simple Receiver disconnected successfully!");
+    LOG_INFO("Simple Receiver disconnected successfully!");
     return true;
 }
 
@@ -81,7 +81,7 @@ bool SimpleReceiver::initProperties()
 
 /********************************************************************************************
 ** INDI is asking us to update the properties because there is a change in CONNECTION status
-** This fucntion is called whenever the device is connected or disconnected.
+** This function is called whenever the device is connected or disconnected.
 *********************************************************************************************/
 bool SimpleReceiver::updateProperties()
 {
@@ -205,7 +205,7 @@ void SimpleReceiver::TimerHit()
         if (timeleft < 0.1)
         {
             /* We're done exposing */
-            IDMessage(getDeviceName(), "Integration done, downloading image...");
+            LOG_INFO("Integration done, downloading image...");
 
             // Set exposure left to zero
             setIntegrationLeft(0);
@@ -232,14 +232,15 @@ void SimpleReceiver::TimerHit()
             /* If target temperature is higher, then increase current Receiver temperature */
             if (currentReceiverTemperature < TemperatureRequest)
                 currentReceiverTemperature++;
-            /* If target temperature is lower, then decrese current Receiver temperature */
+            /* If target temperature is lower, then decrease current Receiver temperature */
             else if (currentReceiverTemperature > TemperatureRequest)
                 currentReceiverTemperature--;
             /* If they're equal, stop updating */
             else
             {
                 TemperatureNP.s = IPS_OK;
-                IDSetNumber(&TemperatureNP, "Target temperature reached.");
+                LOG_INFO("Target temperature reached.");
+                IDSetNumber(&TemperatureNP, nullptr);
 
                 break;
             }
@@ -271,7 +272,7 @@ void SimpleReceiver::grabFrame()
     for (int i = 0; i < len; i++)
         continuum[i] = rand() % 255;
 
-    IDMessage(getDeviceName(), "Download complete.");
+    LOG_INFO("Download complete.");
 
     // Let INDI::Receiver know we're done filling the image buffer
     IntegrationComplete();

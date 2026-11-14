@@ -94,7 +94,11 @@ class Driver
         /**************************************************************************
          Communication
         **************************************************************************/
-        bool sendCommand(const char *command, int count = 1, char *response = nullptr, uint8_t timeout = IOP_TIMEOUT,
+        bool sendCommand(const char *command,
+                         int count = 1,
+                         char *response = nullptr,
+                         int minimumCount = -1,
+                         uint8_t timeout = IOP_TIMEOUT,
                          uint8_t debugLog = INDI::Logger::DBG_DEBUG);
         bool sendCommandOk(const char *command);
         bool checkConnection(int fd);
@@ -104,7 +108,7 @@ class Driver
         **************************************************************************/
         /** Get iEQ current status info */
         bool getStatus(IOPInfo *info);
-        /** Get All firmware informatin in addition to mount model */
+        /** Get All firmware information in addition to mount model */
         bool getFirmwareInfo(FirmwareInfo *info);
         /** Get RA/DEC */
         bool getCoords(double *ra, double *de, IOP_PIER_STATE *pierState, IOP_CW_STATE *cwState);

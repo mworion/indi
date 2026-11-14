@@ -1,6 +1,6 @@
 /*
     Astro-Electronic FS-2 Driver
-    Copyright (C) 2015 Jasem Mutlaq (mutlaqja@ikarustech.com)
+    Copyright (C) 2015-2023 Jasem Mutlaq (mutlaqja@ikarustech.com)
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Lesser General Public
@@ -20,6 +20,7 @@
 #include "lx200fs2.h"
 
 #include "indicom.h"
+#include "lx200driver.h"
 
 #include <libnova/transform.h>
 
@@ -28,7 +29,7 @@
 
 LX200FS2::LX200FS2() : LX200Generic()
 {
-    setVersion(2, 2);
+    setVersion(2, 3);
 
     SetTelescopeCapability(
         TELESCOPE_CAN_PARK | TELESCOPE_CAN_SYNC | TELESCOPE_CAN_GOTO | TELESCOPE_HAS_LOCATION | TELESCOPE_CAN_ABORT, 4);
@@ -58,7 +59,7 @@ bool LX200FS2::updateProperties()
 
     if (isConnected())
     {
-        defineProperty(&SlewRateSP);
+        defineProperty(SlewRateSP);
         defineProperty(&SlewAccuracyNP);
         defineProperty(&StopAfterParkSP);
 
@@ -66,7 +67,7 @@ bool LX200FS2::updateProperties()
         {
             // If loading parking data is successful, we just set the default parking values.
             SetAxis1ParkDefault(0);
-            SetAxis2ParkDefault(LocationN[LOCATION_LATITUDE].value);
+            SetAxis2ParkDefault(LocationNP[LOCATION_LATITUDE].getValue());
 
             if (isParked())
             {
@@ -79,14 +80,14 @@ bool LX200FS2::updateProperties()
         {
             // Otherwise, we set all parking data to default in case no parking data is found.
             SetAxis1Park(0);
-            SetAxis2Park(LocationN[LOCATION_LATITUDE].value);
+            SetAxis2Park(LocationNP[LOCATION_LATITUDE].getValue());
             SetAxis1ParkDefault(0);
-            SetAxis2ParkDefault(LocationN[LOCATION_LATITUDE].value);
+            SetAxis2ParkDefault(LocationNP[LOCATION_LATITUDE].getValue());
         }
     }
     else
     {
-        deleteProperty(SlewRateSP.name);
+        deleteProperty(SlewRateSP);
         deleteProperty(SlewAccuracyNP.name);
         deleteProperty(StopAfterParkSP.name);
     }
@@ -209,7 +210,7 @@ void LX200FS2::TrackingStop()
     if (ParkedStatus != PARKED_NOTPARKED) return;
 
     // Remember current slew rate
-    savedSlewRateIndex = static_cast <enum TelescopeSlewRate> (IUFindOnSwitchIndex(&SlewRateSP));
+    savedSlewRateIndex = static_cast <enum TelescopeSlewRate> (SlewRateSP.findOnSwitchIndex());
 
     updateSlewRate(SLEW_CENTERING);
     ParkedStatus = PARKED_NEEDABORT;
@@ -358,11 +359,11 @@ bool LX200FS2::SetCurrentPark()
 
 bool LX200FS2::SetDefaultPark()
 {
-    // By defualt azimuth 0
+    // By default azimuth 0
     SetAxis1Park(0);
 
     // Altitude = latitude of observer
-    SetAxis2Park(LocationN[LOCATION_LATITUDE].value);
+    SetAxis2Park(LocationNP[LOCATION_LATITUDE].getValue());
 
     return true;
 }
@@ -374,3 +375,72 @@ bool LX200FS2::updateLocation(double latitude, double longitude, double elevatio
     INDI_UNUSED(elevation);
     return true;
 }
+
+bool LX200FS2::Goto(double r, double d)
+{
+    targetRA  = r;
+    targetDEC = d;
+    char RAStr[64], DecStr[64];
+
+    fs_sexa(RAStr, targetRA, 2, 3600);
+    fs_sexa(DecStr, targetDEC, 2, 3600);
+
+
+    if (!isSimulation())
+    {
+        if (setObjectRA(PortFD, targetRA, true) < 0 || (setObjectDEC(PortFD, targetDEC, true)) < 0)
+        {
+            EqNP.setState(IPS_ALERT);
+            LOG_ERROR("Error setting RA/DEC.");
+            EqNP.apply();
+            return false;
+        }
+
+        if (Slew(PortFD))
+        {
+            EqNP.setState(IPS_ALERT);
+            LOGF_ERROR("Error Slewing to JNow RA %s - DEC %s\n", RAStr, DecStr);
+            EqNP.apply();
+            slewError(1);
+            return false;
+        }
+    }
+
+    TrackState = SCOPE_SLEWING;
+    EqNP.setState(IPS_BUSY);
+
+    LOGF_INFO("Slewing to RA: %s - DEC: %s", RAStr, DecStr);
+    return true;
+}
+
+bool LX200FS2::Sync(double ra, double dec)
+{
+    if (!isSimulation())
+    {
+        if (setObjectRA(PortFD, ra, true) < 0 || setObjectDEC(PortFD, dec, true) < 0)
+        {
+            EqNP.setState(IPS_ALERT);
+            LOG_ERROR("Error setting RA/DEC. Unable to Sync.");
+            EqNP.apply();
+            return false;
+        }
+
+        char syncString[256];
+        if (::Sync(PortFD, syncString) < 0)
+        {
+            EqNP.setState(IPS_ALERT);
+            LOG_ERROR("Synchronization failed.");
+            EqNP.apply();
+            return false;
+        }
+
+    }
+
+    currentRA  = ra;
+    currentDEC = dec;
+    LOG_INFO("Synchronization successful.");
+    EqNP.setState(IPS_OK);
+    NewRaDec(currentRA, currentDEC);
+    return true;
+}
+

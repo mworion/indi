@@ -18,9 +18,18 @@
 
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <deque>
+#include <mutex>
+#include <random>
+#include <vector>
+#include <map>
+#include <string>
 
-#include "indiccd.h"
+#include <indiccd.h>
+#include "sky_renderer.h"
+#include "simulator_clock.h"
 #include "indifilterinterface.h"
 
 /**
@@ -36,7 +45,10 @@
  *
  * Video streaming can be enabled from the Stream property group with several encoders and recorders supported.
  *
- * @author Gerry Rozema
+ * Planet simulation mode uses xplanet to render solar system bodies at the correct angular scale based on
+ * focal length, pixel size, and planet angular diameter.
+ *
+m * @author Gerry Rozema
  * @author Jasem Mutlaq
  */
 class CCDSim : public INDI::CCD, public INDI::FilterInterface
@@ -97,16 +109,13 @@ class CCDSim : public INDI::CCD, public INDI::FilterInterface
 
         int DrawCcdFrame(INDI::CCDChip *targetChip);
 
-        int DrawImageStar(INDI::CCDChip *targetChip, float, float, float, float ExposureTime);
-        int AddToPixel(INDI::CCDChip *targetChip, int, int, int);
-
         virtual IPState GuideNorth(uint32_t) override;
         virtual IPState GuideSouth(uint32_t) override;
         virtual IPState GuideEast(uint32_t) override;
         virtual IPState GuideWest(uint32_t) override;
 
         virtual bool saveConfigItems(FILE *fp) override;
-        virtual void addFITSKeywords(INDI::CCDChip *targetChip) override;
+        virtual void addFITSKeywords(INDI::CCDChip *targetChip, std::vector<INDI::FITSRecord> &fitsKeyword) override;
         virtual void activeDevicesUpdated() override;
         virtual int SetTemperature(double temperature) override;
         virtual bool UpdateCCDFrame(int x, int y, int w, int h) override;
@@ -124,14 +133,60 @@ class CCDSim : public INDI::CCD, public INDI::FilterInterface
 
     protected:
 
-        float CalcTimeLeft(timeval, float);
+        bool watchDirectory();
         bool loadNextImage();
+        bool loadNextFITSImage(const std::string &filename);
+#ifdef HAVE_XISF
+        bool loadNextXISFImage(const std::string &filename);
+#endif
         bool setupParameters();
+
+        // Updates the planet sprite from xplanet when it is missing, stale, or its parameters changed.
+        // Caller must hold m_PlanetMutex.
+        bool renderPlanet();
+        // Planet center in sensor pixels, from the mount pointing, guide pulses, drift and jitter.
+        // Caller must hold m_PlanetMutex.
+        void planetPosition(double &x, double &y);
+        // Draw the planet into the chip subframe: interleaved 8-bit RGB for streaming,
+        // planar 16-bit RGB for FITS captures. Caller must hold m_PlanetMutex.
+        void drawPlanetRGB8(uint8_t *buffer, double centerX, double centerY);
+        void drawPlanetRGB16(uint16_t *buffer, double centerX, double centerY);
+        // Put the planet back in the frame center at the current pointing and restart the drift
+        void recenterPlanet();
+
+        // Updates currentRA/currentDE (J2000) from the snooped mount position and guide pulses
+        void updatePointing();
+        // Shifts JNow ra (hours) and de (degrees) by the user pointing offset
+        void applyPointingOffset(double &ra, double &de);
+        // Periodic error offset in RA (degrees)
+        float periodicErrorOffset();
+        // Camera rotation (degrees): manual offset + snooped rotator + pier flip, or field rotation on an Alt-Az mount
+        double cameraRotation();
+        // Parallactic angle (degrees) of the pointing at the simulated time, 0 while the location is unknown
+        double parallacticAngle();
 
         // Turns on/off Bayer RGB simulation.
         void setBayerEnabled(bool onOff);
 
-        double flux(double magnitude) const;
+        float CalcTimeLeft(timeval start, float req);
+
+        SkyRenderer m_Renderer;
+
+        // Defect layout of the primary sensor, regenerated whenever the resolution or the
+        // SIM_DEFECTS settings change.
+        void updateDefects();
+        std::vector<SensorDefect> m_Defects;
+        int m_DefectsXRes {0}, m_DefectsYRes {0}, m_DefectsHot {0}, m_DefectsCold {0};
+        double m_DefectsRate {0};
+
+        // Follows the client's TIME_UTC, so the rendered sky agrees with the telescope simulator's
+        SimulatorClock m_Clock;
+
+        // ADU ceiling and magnitude calibration -- updated from INDI properties each frame.
+        int   m_MaxVal        {65000};
+        float m_LimitingMag   {11.5f};
+        float m_SaturationMag {2.0f};
+        float m_Seeing        {3.5f};  // arcsec FWHM, updated by focus simulation
 
         double TemperatureRequest { 0 };
 
@@ -151,21 +206,20 @@ class CCDSim : public INDI::CCD, public INDI::FilterInterface
         bool ShowStarField { true };
         int m_Bias { 1500 };
         int m_MaxNoise { 20 };
-        int m_MaxVal { 65000 };
-        int maxpix { 0 };
-        int minpix { 65000 };
         float m_SkyGlow { 40 };
-        float m_LimitingMag { 11.5 };
-        float m_SaturationMag { 2 };
-        float seeing { 3.5 };
-        float ImageScalex { 1.0 };
-        float ImageScaley { 1.0 };
         //  An oag is offset this much from center of scope position (arcminutes)
         float m_OAGOffset { 0 };
-        float m_RotationCW { 0 };
         float m_TimeFactor { 1 };
+        // With a rotator device "RotatorAngle" is snooped and defined, so the
+        // resulting camera rotation is the addition of offset and rotator angle.
+        // Without a rotator device ("Manual Rotator") the rotator angle is
+        // considered fixed to 0° and the camera rotation is equal to offset
+        float m_RotationOffset { 0 };
+        // The snooped mount is Alt-Az, so the field turns with the parallactic angle
+        bool m_AltAzMount { false };
 
         bool m_SimulateBayer { false };
+        bool m_SimulateTimeout { false };
 
         //  our zero point calcs used for drawing stars
         //float k { 0 };
@@ -185,6 +239,8 @@ class CCDSim : public INDI::CCD, public INDI::FilterInterface
         double currentRA { 0 };
         double currentDE { 0 };
         bool usePE { false };
+        double raPE  { 0 };   // JNow RA  from snooped EQUATORIAL_PE (hours)
+        double decPE { 0 };   // JNow Dec from snooped EQUATORIAL_PE (degrees)
         time_t RunStart;
 
         float guideNSOffset {0};
@@ -202,12 +258,15 @@ class CCDSim : public INDI::CCD, public INDI::FilterInterface
         std::deque<std::string> m_AllFiles, m_RemainingFiles;
 
         //  And this lives in our simulator settings page
-        INumberVectorProperty SimulatorSettingsNP;
-        INumber SimulatorSettingsN[SIM_N];
+        INDI::PropertyNumber SimulatorSettingsNP {16};
 
-        ISwitchVectorProperty SimulateBayerSP;
-        ISwitch SimulateBayerS[2];
-
+        INDI::PropertySwitch SimTestsSP {3};
+        enum
+        {
+            SIM_TESTS_BAYER,
+            SIM_TESTS_CRASH,
+            SIM_TESTS_TIMEOUT
+        };
         //  We are going to snoop these from focuser
         INumberVectorProperty FWHMNP;
         INumber FWHMN[1];
@@ -218,29 +277,157 @@ class CCDSim : public INDI::CCD, public INDI::FilterInterface
         // FocuserPosition[2] is the seeing (in arcsec)
         // We need to have these values here, since we cannot snoop it from the focuser (the focuser does not
         // publish these values)
-        INumberVectorProperty FocusSimulationNP;
-        INumber FocusSimulationN[3];
+        INDI::PropertyNumber FocusSimulationNP {3};
+        enum
+        {
+            SIM_FOCUS_POSITION,
+            SIM_FOCUS_MAX,
+            SIM_SEEING
+        };
 
-        INumberVectorProperty EqPENP;
-        INumber EqPEN[2];
+        INDI::PropertyNumber TiltSimulationNP {2};
+        enum
+        {
+            SIM_TILT_LR,
+            SIM_TILT_TB
+        };
 
-        ISwitch CoolerS[2];
-        ISwitchVectorProperty CoolerSP;
+        // Fixed hot and cold pixels on the primary sensor, to test dark subtraction and defect maps.
+        INDI::PropertyNumber DefectSimulationNP {3};
+        enum
+        {
+            SIM_HOT_PIXELS,
+            SIM_COLD_PIXELS,
+            SIM_HOT_RATE
+        };
 
-        INumber GainN[1];
-        INumberVectorProperty GainNP;
+        INDI::PropertyNumber EqPENP {2};
 
-        INumber OffsetN[1];
-        INumberVectorProperty OffsetNP;
+        // Parallactic angle added to the camera rotation while the mount is Alt-Az
+        INDI::PropertyNumber FieldRotationNP {1};
 
-        IText DirectoryT[1] {};
-        ITextVectorProperty DirectoryTP;
+        // Renders the sky away from where the mount points, so solved images disagree with the
+        // mount coordinates. Simulates a bad pointing model for testing alignment.
+        INDI::PropertyNumber PointingOffsetNP {2};
+        enum
+        {
+            SIM_OFFSET_RA,
+            SIM_OFFSET_DE
+        };
 
-        ISwitch DirectoryS[2];
-        ISwitchVectorProperty DirectorySP;
+        INDI::PropertySwitch CoolerSP {2};
 
-        ISwitchVectorProperty CrashSP;
-        ISwitch CrashS[1];
+        INDI::PropertyNumber GainNP {1};
+
+        INDI::PropertyNumber OffsetNP {1};
+
+        INDI::PropertyText DirectoryTP {1};
+        INDI::PropertySwitch DirectorySP {2};
+
+        INDI::PropertySwitch ResolutionSP {3};
+        inline static const std::vector<std::pair<uint32_t, uint32_t>> Resolutions =
+        {
+            {1280, 1024},
+            {6000, 4000},
+            {0, 0} // Custom
+        };
+
+        // ==================== Planet Simulation ====================
+
+        // Lookup table: average angular diameter at opposition (arcsec)
+        // Moon and Sun are mean apparent diameters
+        inline static const std::map<std::string, float> PlanetAngularDiameter =
+        {
+            {"mercury", 11.0f},
+            {"venus",   35.0f},
+            {"mars",    18.0f},
+            {"jupiter", 42.0f},
+            {"saturn",  42.0f},   // including rings
+            {"uranus",   3.7f},
+            {"neptune",  2.3f},
+            {"moon",   1860.0f},  // ~0.5°
+            {"sun",    1920.0f}   // ~0.53°
+        };
+
+        // Planet mode toggle
+        INDI::PropertySwitch PlanetModeSP {2};
+        enum
+        {
+            PLANET_ENABLED,
+            PLANET_DISABLED
+        };
+
+        // Planet selection switch (one per body)
+        INDI::PropertySwitch PlanetSelectSP {9};
+        enum
+        {
+            PLANET_MERCURY,
+            PLANET_VENUS,
+            PLANET_MARS,
+            PLANET_JUPITER,
+            PLANET_SATURN,
+            PLANET_URANUS,
+            PLANET_NEPTUNE,
+            PLANET_MOON,
+            PLANET_SUN
+        };
+
+        // Planet refresh interval in minutes, and optional size override in arcsec (0 = use lookup table)
+        INDI::PropertyNumber PlanetSettingsNP {2};
+        enum
+        {
+            PLANET_REFRESH,
+            PLANET_SIZE
+        };
+
+        // Tracking errors and sky conditions applied to the planet position, for testing tracking
+        INDI::PropertyNumber PlanetDriftNP {4};
+        enum
+        {
+            PLANET_DRIFT_RA,
+            PLANET_DRIFT_DE,
+            PLANET_JITTER,
+            PLANET_TRANSPARENCY
+        };
+
+        INDI::PropertySwitch PlanetRecenterSP {1};
+
+        // xplanet executable path and config file path
+        INDI::PropertyText PlanetPathsTP {2};
+        enum
+        {
+            PLANET_XPLANET_PATH,
+            PLANET_XPLANET_CONFIG
+        };
+
+        // Planet simulation state
+        bool m_PlanetMode {false};
+        bool m_IsRGBFormat {false};
+        std::string m_SelectedPlanet {"jupiter"};
+        float m_PlanetRefreshMinutes {60.0f};
+        float m_PlanetSizeOverride {0.0f};  // 0 = use lookup table
+        std::string m_XPlanetBinary {"xplanet"};
+        std::string m_XPlanetConfig {"/usr/share/xplanet/config/default"};
+        // Set to 0 to force a fresh xplanet render
+        std::atomic<time_t> m_LastPlanetRenderTime {0};
+        // Guards the sprite and the planet position, used by both the stream thread and exposures
+        std::mutex m_PlanetMutex;
+        // Planet disk scaled to its size on the sensor, interleaved 8-bit RGB, square
+        std::vector<uint8_t> m_PlanetSprite;
+        uint32_t m_PlanetSpriteSize {0};
+        std::vector<uint8_t> m_PlanetStreamFrame;
+        // Sky position (J2000 degrees) the planet sits at, taken from the pointing when recentered
+        bool m_PlanetPositionValid {false};
+        double m_PlanetRA {0};
+        double m_PlanetDE {0};
+        std::chrono::steady_clock::time_point m_PlanetDriftStart;
+        std::mt19937 m_PlanetRandom {std::random_device{}()};
+        // Mount is slewing; the planet is recentered when the slew ends
+        bool m_MountSlewing {false};
+        float m_CachedFocalLength {0};
+        float m_CachedPixelSizeX {0};
+        std::string m_CachedPlanet;
 
         static const constexpr char* SIMULATOR_TAB = "Simulator Config";
+        static const constexpr char* PLANET_TAB = "Planet";
 };

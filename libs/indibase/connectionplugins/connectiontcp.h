@@ -21,6 +21,8 @@
 #pragma once
 
 #include "connectioninterface.h"
+#include "indipropertytext.h"
+#include "indipropertyswitch.h"
 
 #include <stdint.h>
 #include <cstdlib>
@@ -30,7 +32,7 @@ namespace Connection
 {
 /**
  * @brief The TCP class manages connection with devices over the network via TCP/IP.
- * Upon successfull connection, reads & writes from and to the device are performed via the returned file descriptor
+ * Upon successful connection, reads & writes from and to the device are performed via the returned file descriptor
  * using standard UNIX read/write functions.
  */
 
@@ -43,7 +45,7 @@ class TCP : public Interface
             TYPE_UDP
         };
 
-        TCP(INDI::DefaultDevice *dev);
+        TCP(INDI::DefaultDevice *dev, IPerm permission = IP_RW);
         virtual ~TCP() = default;
 
         virtual bool Connect() override;
@@ -66,15 +68,15 @@ class TCP : public Interface
 
         virtual const char *host() const
         {
-            return AddressT[0].text;
+            return AddressTP[0].getText();
         }
         virtual uint32_t port() const
         {
-            return atoi(AddressT[1].text);
+            return atoi(AddressTP[1].getText());
         }
         ConnectionType connectionType() const
         {
-            return static_cast<ConnectionType>(IUFindOnSwitchIndex(&TcpUdpSP));
+            return static_cast<ConnectionType>(TcpUdpSP.findOnSwitchIndex());
         }
 
         virtual bool ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n) override;
@@ -105,16 +107,14 @@ class TCP : public Interface
         /// Properties
         //////////////////////////////////////////////////////////////////////////////////////////////////
         // IP Address/Port
-        ITextVectorProperty AddressTP;
-        IText AddressT[2] {};
+        INDI::PropertyText AddressTP {2};
         // Connection Type
-        ISwitch TcpUdpS[2];
-        ISwitchVectorProperty TcpUdpSP;
+        INDI::PropertySwitch TcpUdpSP {2};
         // Auto search
-        ISwitch LANSearchS[2];
-        ISwitchVectorProperty LANSearchSP;
+        INDI::PropertySwitch LANSearchSP {2};
 
         // Variables
+        IPerm m_Permission = IP_RW;
         std::string m_ConfigHost;
         std::string m_ConfigPort;
         int m_ConfigConnectionType {-1};

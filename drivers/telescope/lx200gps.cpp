@@ -30,11 +30,12 @@
 LX200GPS::LX200GPS() : LX200Autostar()
 {
     MaxReticleFlashRate = 9;
+    SetTelescopeCapability(GetTelescopeCapability() | TELESCOPE_CAN_CONTROL_TRACK, 4);
 }
 
 const char *LX200GPS::getDefaultName()
 {
-    return (const char *)"LX200 GPS";
+    return "LX200 GPS";
 }
 
 bool LX200GPS::initProperties()
@@ -86,6 +87,12 @@ bool LX200GPS::initProperties()
     IUFillNumber(&OTATempN[0], "Temp", "", "%03g", -200.0, 500.0, 0.0, 0);
     IUFillNumberVector(&OTATempNP, OTATempN, 1, getDeviceName(), "OTA Temp (C)", "", GPS_TAB, IP_RO, 0, IPS_IDLE);
 
+    GuideRateNP[0].fill("GUIDE_RATE_WE", "W/E Rate", "%g",  0, 2, 0.05, 0.5);
+    GuideRateNP[1].fill("GUIDE_RATE_NS", "N/S Rate", "%g", 0, 2, 0.05, 0.5);
+    GuideRateNP.fill(getDeviceName(), "GUIDE_RATE", "Custom Guide Rate", MOTION_TAB, IP_RW, 0, IPS_IDLE);
+
+    setMountType(MOUNT_ALTAZ);
+
     return true;
 }
 
@@ -130,6 +137,7 @@ bool LX200GPS::updateProperties()
         defineProperty(&AzRaBacklashSP);
         defineProperty(&OTATempNP);
         defineProperty(&OTAUpdateSP);
+        defineProperty(GuideRateNP);
     }
     else
     {
@@ -143,6 +151,7 @@ bool LX200GPS::updateProperties()
         deleteProperty(AzRaBacklashSP.name);
         deleteProperty(OTATempNP.name);
         deleteProperty(OTAUpdateSP.name);
+        deleteProperty(GuideRateNP);
     }
 
     return true;
@@ -169,6 +178,7 @@ bool LX200GPS::ISNewSwitch(const char *dev, const char *name, ISState *states, c
             else
                 ret = turnGPSOff(PortFD);
 
+            INDI_UNUSED(ret);
             GPSPowerSP.s = IPS_OK;
             IDSetSwitch(&GPSPowerSP, index == 0 ? "GPS System is ON" : "GPS System is OFF");
             return true;
@@ -191,17 +201,18 @@ bool LX200GPS::ISNewSwitch(const char *dev, const char *name, ISState *states, c
             }
             else if (index == 1)
             {
-                ret = gpsWakeUp(PortFD);
-                strncpy(msg, "GPS system is reactivated.", 64);
+                ret = gpsWakeUp(PortFD)
+                      strncpy(msg, "GPS system is reactivated.", 64);
             }
             else
             {
-                ret = gpsRestart(PortFD);
-                strncpy(msg, "GPS system is restarting...", 64);
+                ret = gpsRestart(PortFD)
+                      strncpy(msg, "GPS system is restarting...", 64);
                 sendScopeTime();
                 sendScopeLocation();
             }
 
+            INDI_UNUSED(ret);
             GPSStatusSP.s = IPS_OK;
             IDSetSwitch(&GPSStatusSP, "%s", msg);
             return true;
@@ -262,6 +273,7 @@ bool LX200GPS::ISNewSwitch(const char *dev, const char *name, ISState *states, c
                 strncpy(msg, "Alt/Dec Compensation Disabled.", 64);
             }
 
+            INDI_UNUSED(ret);
             AltDecPecSP.s = IPS_OK;
             IDSetSwitch(&AltDecPecSP, "%s", msg);
 
@@ -289,6 +301,7 @@ bool LX200GPS::ISNewSwitch(const char *dev, const char *name, ISState *states, c
                 strncpy(msg, "Ra/Az Compensation Disabled.", 64);
             }
 
+            INDI_UNUSED(ret);
             AzRaPecSP.s = IPS_OK;
             IDSetSwitch(&AzRaPecSP, "%s", msg);
 
@@ -300,6 +313,7 @@ bool LX200GPS::ISNewSwitch(const char *dev, const char *name, ISState *states, c
             int ret = 0;
 
             ret = activateAltDecAntiBackSlash(PortFD);
+            INDI_UNUSED(ret);
             AltDecBacklashSP.s = IPS_OK;
             IDSetSwitch(&AltDecBacklashSP, "Alt/Dec Anti-backlash enabled");
             return true;
@@ -311,6 +325,7 @@ bool LX200GPS::ISNewSwitch(const char *dev, const char *name, ISState *states, c
 
             ret = activateAzRaAntiBackSlash(PortFD);
             AzRaBacklashSP.s = IPS_OK;
+            INDI_UNUSED(ret);
             IDSetSwitch(&AzRaBacklashSP, "Az/Ra Anti-backlash enabled");
             return true;
         }
@@ -381,11 +396,35 @@ bool LX200GPS::updateTime(ln_date *utc, double utc_offset)
     return true;
 }
 
+bool LX200GPS::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
+{
+
+    if (strcmp(name, "GUIDE_RATE") == 0)
+    {
+        GuideRateNP[0].value = values[0];
+        GuideRateNP[1].value = values[1];
+        GuideRateNP.apply();
+        LOG_INFO("Guide rate set in INDI driver, please check mount is set to the same values");
+    }
+
+    return LX200Autostar::ISNewNumber(dev, name, values, names, n);
+}
+
+bool LX200GPS::saveConfigItems(FILE *fp)
+{
+    LX200Autostar::saveConfigItems(fp);
+    GuideRateNP.save(fp);
+    return true;
+}
+
 bool LX200GPS::UnPark()
 {
     int ret = 0;
 
     ret = initTelescope(PortFD);
+
+    INDI_UNUSED(ret);
     TrackState = SCOPE_IDLE;
+    SetParked(false);
     return true;
 }

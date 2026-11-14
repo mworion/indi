@@ -1,13 +1,13 @@
 /*******************************************************************************
  DDW Dome INDI Driver
 
- Copyright(c) 2020-2021 Jarno Paananen. All rights reserved.
+ Copyright(c) 2020-2023 Jarno Paananen. All rights reserved.
 
  based on:
 
  ScopeDome Dome INDI Driver
 
- Copyright(c) 2017-2021 Jarno Paananen. All rights reserved.
+ Copyright(c) 2017-2023 Jarno Paananen. All rights reserved.
 
  and
 
@@ -46,6 +46,9 @@ DDW::DDW()
 {
     setVersion(1, 0);
     SetDomeCapability(DOME_CAN_ABORT | DOME_CAN_ABS_MOVE | DOME_CAN_PARK | DOME_HAS_SHUTTER);
+    // DDW runs one command at a time, and closing the shutter first rotates the dome to home,
+    // so Park()/UnPark() sequence the shutter themselves.
+    SetShutterParkPolicyHandledByDriver(true);
     setDomeConnection(CONNECTION_SERIAL);
 }
 
@@ -53,9 +56,8 @@ bool DDW::initProperties()
 {
     INDI::Dome::initProperties();
 
-    IUFillNumber(&FirmwareVersionN[0], "VERSION", "Version", "%2.0f", 0.0, 99.0, 1.0, 0.0);
-    IUFillNumberVector(&FirmwareVersionNP, FirmwareVersionN, 2, getDeviceName(), "FIRMWARE", "Firmware", INFO_TAB,
-                       IP_RO, 60, IPS_IDLE);
+    FirmwareVersionNP[0].fill("VERSION", "Version", "%2.0f", 0.0, 99.0, 1.0, 0.0);
+    FirmwareVersionNP.fill(getDeviceName(), "FIRMWARE", "Firmware", INFO_TAB, IP_RO, 60, IPS_IDLE);
 
     SetParkDataType(PARK_AZ);
 
@@ -88,9 +90,9 @@ bool DDW::SetupParms()
         SetAxis1ParkDefault(0);
     }
 
-    FirmwareVersionN[0].value = fwVersion;
-    FirmwareVersionNP.s       = IPS_OK;
-    IDSetNumber(&FirmwareVersionNP, nullptr);
+    FirmwareVersionNP[0].setValue(fwVersion);
+    FirmwareVersionNP.setState(IPS_OK);
+    FirmwareVersionNP.apply();
     return true;
 }
 
@@ -117,8 +119,8 @@ bool DDW::Handshake()
 
     parseGINF(response.c_str());
     cmdState = IDLE;
-    DomeAbsPosNP.s = IPS_OK;
-    IDSetNumber(&DomeAbsPosNP, nullptr);
+    DomeAbsPosNP.setState(IPS_OK);
+    DomeAbsPosNP.apply();
     return true;
 }
 
@@ -127,7 +129,7 @@ bool DDW::Handshake()
 * ***********************************************************************************/
 const char *DDW::getDefaultName()
 {
-    return (const char *)"DDW Dome";
+    return "DDW Dome";
 }
 
 /************************************************************************************
@@ -139,12 +141,12 @@ bool DDW::updateProperties()
 
     if (isConnected())
     {
-        defineProperty(&FirmwareVersionNP);
+        defineProperty(FirmwareVersionNP);
         SetupParms();
     }
     else
     {
-        deleteProperty(FirmwareVersionNP.name);
+        deleteProperty(FirmwareVersionNP);
     }
 
     return true;
@@ -153,16 +155,6 @@ bool DDW::updateProperties()
 /************************************************************************************
  *
 * ***********************************************************************************/
-bool DDW::ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n)
-{
-    return INDI::Dome::ISNewSwitch(dev, name, states, names, n);
-}
-
-bool DDW::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
-{
-    return INDI::Dome::ISNewNumber(dev, name, values, names, n);
-}
-
 int DDW::writeCmd(const char *cmd)
 {
     int nbytes_written = 0, rc = -1;
@@ -261,7 +253,7 @@ void DDW::parseGINF(const char *response)
         ticksPerRev = dticks;
         homeAz = 360.0 * homepos / ticksPerRev;
 
-        DomeAbsPosN[0].value = 360.0 * azimuth / ticksPerRev;
+        DomeAbsPosNP[0].setValue(360.0 * azimuth / ticksPerRev);
 
         ShutterState newState;
         switch (shutter)
@@ -310,7 +302,7 @@ void DDW::TimerHit()
                 writeCmd("GINF");
                 watchdog = 0; // prevent from triggering immediately again
             }
-            break;
+            break; // exit loop
         }
 
         watchdog = 0;
@@ -339,8 +331,8 @@ void DDW::TimerHit()
                 LOGF_DEBUG("Tick counter %d", tick);
 
                 // Update current position
-                DomeAbsPosN[0].value = 359.0 * tick / ticksPerRev;
-                IDSetNumber(&DomeAbsPosNP, nullptr);
+                DomeAbsPosNP[0].setValue(359.0 * tick / ticksPerRev);
+                DomeAbsPosNP.apply();
                 break;
             }
             case 'O':
@@ -389,7 +381,7 @@ void DDW::TimerHit()
                         if(prevState == SHUTTER_OPERATION)
                         {
                             // First phase of parking done, now move to park position
-                            DomeAbsPosNP.s = MoveAbs(GetAxis1Park());
+                            DomeAbsPosNP.setState(MoveAbs(GetAxis1Park()));
                         }
                         else
                         {
@@ -405,7 +397,7 @@ void DDW::TimerHit()
                             if (gotoPending)
                             {
                                 LOGF_DEBUG("Performing pending goto to %f", gotoTarget);
-                                DomeAbsPosNP.s = MoveAbs(gotoTarget);
+                                DomeAbsPosNP.setState(MoveAbs(gotoTarget));
                                 gotoPending = false;
                             }
                             else
@@ -416,7 +408,7 @@ void DDW::TimerHit()
                         }
                         break;
                 }
-                IDSetNumber(&DomeAbsPosNP, nullptr);
+                DomeAbsPosNP.apply();
                 break;
             }
             default:
@@ -468,14 +460,10 @@ IPState DDW::Park()
     }
 
     // First close the shutter if wanted (moves to home position), then move to park position
-    if (ShutterParkPolicyS[SHUTTER_CLOSE_ON_PARK].s == ISS_ON)
-    {
+    if (ShutterParkPolicySP[SHUTTER_CLOSE_ON_PARK].getState() == ISS_ON)
         return ControlShutter(SHUTTER_CLOSE);
-    }
-    else
-    {
-        return MoveAbs(GetAxis1Park());
-    }
+
+    return MoveAbs(GetAxis1Park());
 }
 
 /************************************************************************************
@@ -489,7 +477,7 @@ IPState DDW::UnPark()
         return IPS_ALERT;
     }
 
-    if (ShutterParkPolicyS[SHUTTER_OPEN_ON_UNPARK].s == ISS_ON)
+    if (ShutterParkPolicySP[SHUTTER_OPEN_ON_UNPARK].getState() == ISS_ON)
     {
         return ControlShutter(SHUTTER_OPEN);
     }
@@ -546,7 +534,7 @@ bool DDW::saveConfigItems(FILE *fp)
 * ***********************************************************************************/
 bool DDW::SetCurrentPark()
 {
-    SetAxis1Park(DomeAbsPosN[0].value);
+    SetAxis1Park(DomeAbsPosNP[0].getValue());
     return true;
 }
 /************************************************************************************

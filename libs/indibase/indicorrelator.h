@@ -22,10 +22,6 @@
 #include "dsp.h"
 #include <fitsio.h>
 
-#ifdef HAVE_WEBSOCKET
-#include "indiwsserver.h"
-#endif
-
 #include <fitsio.h>
 
 #include <memory>
@@ -93,7 +89,7 @@ class Correlator : public SensorInterface
 
         /**
          * \enum Correlation
-         * \brief Struct containing the correlation, coordinate and baseline informations.
+         * \brief Struct containing the correlation, coordinate and baseline information.
          */
         typedef struct
         {
@@ -248,7 +244,7 @@ class Correlator : public SensorInterface
         }
 
         /**
-         * @brief SetCorrelatorCapability Set the Correlator capabilities. Al fields must be initilized.
+         * @brief SetCorrelatorCapability Set the Correlator capabilities. Al fields must be initialized.
          * @param cap pointer to CorrelatorCapability struct.
          */
         void SetCorrelatorCapability(uint32_t cap);

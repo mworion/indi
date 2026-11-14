@@ -21,7 +21,7 @@
 
 #define INDI_DEBUG_LOGGING
 #ifdef INDI_DEBUG_LOGGING
-#include "indibase/inditelescope.h"
+#include "inditelescope.h"
 #define MYDEBUG(priority, msg) \
     INDI::Logger::getInstance().print(pChildTelescope->getDeviceName(), priority, __FILE__, __LINE__, msg)
 #define MYDEBUGF(priority, msg, ...) \
@@ -129,7 +129,7 @@ class SkywatcherAPI
 
         /// \brief Check if the current mount is a Merlin (AltAz)
         /// \return True if the current mount is Merlin otherwise false.
-        bool IsMerlinMount() const;
+        //bool IsMerlinMount() const;
 
         /// \brief Check if the current mount is AZ GTi
         /// \return True if the current mount is AZ GTi otherwise false.
@@ -318,7 +318,7 @@ class SkywatcherAPI
         /// \return false failure
         bool SlowStop(AXISID Axis);
 
-        /// \brief Start the axis slewing in the prevously selected mode
+        /// \brief Start the axis slewing in the previously selected mode
         /// \param[in] Axis - The axis to use.
         /// \return false failure
         bool StartAxisMotion(AXISID Axis);
@@ -349,6 +349,8 @@ class SkywatcherAPI
             AZEQ6_PRO        = 0x22,
             EQ6_PRO          = 0x23,
             EQ5_PRO          = 0x31,
+            WAVE_150I        = 0x45,
+            WAVE_100I        = 0x44,
             GT               = 0x80,
             MF               = 0x81,
             _114GT           = 0x82,
@@ -409,9 +411,10 @@ class SkywatcherAPI
 
     private:
         int MyPortFD { 0 };
-        // In seconds.
-        static constexpr uint8_t SKYWATCHER_MAX_RETRTY {3};
-        static constexpr uint8_t SKYWATCHER_TIMEOUT {5};
+        /// default timeout in synscan app os 200ms and 2 retransmissions, so put there little bit more
+        static constexpr uint8_t SKYWATCHER_MAX_RETRTY {5};
+        static constexpr uint8_t SKYWATCHER_TIMEOUT_S  {0};
+        static constexpr long    SKYWATCHER_TIMEOUT_US {300000};
         static constexpr uint8_t SKYWATCHER_MAX_CMD {16};
 
         static const std::map<int, std::string> errorCodes;

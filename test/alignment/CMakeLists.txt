@@ -5,10 +5,56 @@ ADD_EXECUTABLE(test_alignment
 )
 
 TARGET_LINK_LIBRARIES(test_alignment
-    indidriver
     AlignmentDriver
+    indidriver
     ${GTEST_BOTH_LIBRARIES}
     ${CMAKE_THREAD_LIBS_INIT}
 )
 
 ADD_TEST(test-alignment test_alignment)
+
+# Load the math plugins from this build tree and not from an installed (possibly different) INDI version,
+# and do not read the configuration of the user running the tests.
+add_dependencies(test_alignment ${INDI_MATH_PLUGIN_TARGETS})
+set_tests_properties(test-alignment PROPERTIES ENVIRONMENT
+    "INDI_MATH_PLUGINS_DIRECTORY=${INDI_MATH_PLUGINS_BUILD_DIRECTORY};INDICONFIG=${CMAKE_CURRENT_BINARY_DIR}/test_alignment_config.xml")
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(ERFA IMPORTED_TARGET erfa)
+
+if(ERFA_FOUND)
+
+ADD_EXECUTABLE(test_alignment_plugins
+    test_alignment_plugins.cpp
+    ../../libs/alignment/BuiltInMathPlugin.cpp
+    ../../libs/alignment/SVDMathPlugin.cpp
+    ../../libs/alignment/NearestMathPlugin.cpp
+    ../../libs/alignment/BasicMathPlugin.cpp
+    ../../libs/alignment/SPKMathPlugin.cpp
+    ../../libs/alignment/spk/vtel.c
+    ../../libs/alignment/spk/pmfit.c
+    ../../libs/alignment/spk/astr.c
+    ../../drivers/telescope/scopesim_helper.cpp
+)
+
+TARGET_INCLUDE_DIRECTORIES(test_alignment_plugins PRIVATE
+    ${CMAKE_SOURCE_DIR}/libs/alignment
+    ${CMAKE_SOURCE_DIR}/libs/alignment/spk
+    ${CMAKE_SOURCE_DIR}/libs/indicore
+    ${CMAKE_SOURCE_DIR}/drivers/telescope
+)
+
+TARGET_LINK_LIBRARIES(test_alignment_plugins
+    AlignmentDriver
+    indidriver
+    PkgConfig::ERFA
+    ${GTEST_BOTH_LIBRARIES}
+    ${CMAKE_THREAD_LIBS_INIT}
+)
+
+TARGET_COMPILE_DEFINITIONS(test_alignment_plugins PRIVATE NO_PLUGIN_HOOKS)
+
+ADD_TEST(test-alignment-plugins test_alignment_plugins)
+
+endif(ERFA_FOUND)
+

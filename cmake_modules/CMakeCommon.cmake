@@ -9,9 +9,9 @@ include(CheckCCompilerFlag)
 # Build Position Independent Code
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# C++14 Support
+# C++17 Support
 if (NOT ANDROID)
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 endif(NOT ANDROID)
 
@@ -38,6 +38,12 @@ IF (UNIX OR APPLE OR ANDROID)
     ENDIF ()
     # Make sure to add optimization flag. Some systems require this for _FORTIFY_SOURCE.
     IF (NOT CMAKE_BUILD_TYPE MATCHES "MinSizeRel" AND NOT CMAKE_BUILD_TYPE MATCHES "Release" AND NOT CMAKE_BUILD_TYPE MATCHES "Debug")
+        # For custom/unknown build types, add -O1 if FORTIFY_SOURCE is active
+        IF(${COMPATIBLE_FORTIFY_SOURCE})
+            SET(SEC_COMP_FLAGS "${SEC_COMP_FLAGS} -O1")
+        ENDIF()
+    ELSEIF (COMPATIBLE_FORTIFY_SOURCE AND CMAKE_BUILD_TYPE MATCHES "Debug")
+        # If FORTIFY_SOURCE is active in Debug mode, add minimal optimization (-O1) to satisfy it
         SET(SEC_COMP_FLAGS "${SEC_COMP_FLAGS} -O1")
     ENDIF ()
     IF (NOT ANDROID AND NOT "${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang" AND NOT APPLE AND NOT CYGWIN)
@@ -46,7 +52,7 @@ IF (UNIX OR APPLE OR ANDROID)
     SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${SEC_COMP_FLAGS}")
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SEC_COMP_FLAGS}")
     SET(SEC_LINK_FLAGS "")
-    IF (NOT APPLE AND NOT CYGWIN AND NOT ${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD")
+    IF (NOT APPLE AND NOT CYGWIN AND NOT ${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD|OpenBSD")
         SET(SEC_LINK_FLAGS "${SEC_LINK_FLAGS} -Wl,-z,nodump -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now")
     ENDIF ()
     SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${SEC_LINK_FLAGS}")
@@ -54,7 +60,7 @@ IF (UNIX OR APPLE OR ANDROID)
 ENDIF ()
 
 # Warning, debug and linker flags
-SET(FIX_WARNINGS OFF CACHE BOOL "Enable strict compilation mode to turn compiler warnings to errors")
+SET(FIX_WARNINGS ON CACHE BOOL "Enable strict compilation mode to turn compiler warnings to errors")
 IF (UNIX OR APPLE)
     SET(COMP_FLAGS "")
     SET(LINKER_FLAGS "")
@@ -64,14 +70,14 @@ IF (UNIX OR APPLE)
         SET(COMP_FLAGS "${COMP_FLAGS} -Werror")
     ENDIF ()
     # Omit problematic warnings
-    IF ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
-        SET(COMP_FLAGS "${COMP_FLAGS} -Wno-unused-but-set-variable")
-    ENDIF ()
     IF ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 6.9.9)
         SET(COMP_FLAGS "${COMP_FLAGS} -Wno-format-truncation")
     ENDIF ()
     IF ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang")
         SET(COMP_FLAGS "${COMP_FLAGS} -Wno-nonnull -Wno-deprecated-declarations")
+        IF (FIX_WARNINGS)
+            SET(COMP_FLAGS "${COMP_FLAGS} -Wno-unused-parameter")
+        ENDIF ()
     ENDIF ()
 
     # Minimal debug info with Clang

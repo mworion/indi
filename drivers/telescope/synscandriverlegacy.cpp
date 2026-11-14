@@ -73,18 +73,18 @@ bool SynscanLegacyDriver::initProperties()
     SetParkDataType(PARK_RA_DEC_ENCODER);
 
     // Slew Rates
-    strncpy(SlewRateS[0].label, "1x", MAXINDILABEL);
-    strncpy(SlewRateS[1].label, "8x", MAXINDILABEL);
-    strncpy(SlewRateS[2].label, "16x", MAXINDILABEL);
-    strncpy(SlewRateS[3].label, "32x", MAXINDILABEL);
-    strncpy(SlewRateS[4].label, "64x", MAXINDILABEL);
-    strncpy(SlewRateS[5].label, "128x", MAXINDILABEL);
-    strncpy(SlewRateS[6].label, "400x", MAXINDILABEL);
-    strncpy(SlewRateS[7].label, "600x", MAXINDILABEL);
-    strncpy(SlewRateS[8].label, "MAX", MAXINDILABEL);
-    IUResetSwitch(&SlewRateSP);
+    SlewRateSP[0].setLabel("1x");
+    SlewRateSP[1].setLabel("8x");
+    SlewRateSP[2].setLabel("16x");
+    SlewRateSP[3].setLabel("32x");
+    SlewRateSP[4].setLabel("64x");
+    SlewRateSP[5].setLabel("128x");
+    SlewRateSP[6].setLabel("400x");
+    SlewRateSP[7].setLabel("600x");
+    SlewRateSP[8].setLabel("MAX");
+    SlewRateSP.reset();
     // Max is the default
-    SlewRateS[8].s = ISS_ON;
+    SlewRateSP[8].setState(ISS_ON);
 
     //////////////////////////////////////////////////////////////////////////////////////////////////
     /// Mount Info Text Property
@@ -105,6 +105,8 @@ bool SynscanLegacyDriver::initProperties()
     //    IUFillSwitch(&UseWiFiS[WIFI_ENABLED], "Enabled", "Enabled", ISS_OFF);
     //    IUFillSwitch(&UseWiFiS[WIFI_DISABLED], "Disabled", "Disabled", ISS_ON);
     //    IUFillSwitchVector(&UseWiFiSP, UseWiFiS, 2, getDeviceName(), "WIFI_SELECT", "Use WiFi?", CONNECTION_TAB, IP_RW, ISR_1OFMANY, 0, IPS_IDLE);
+
+    setMountType(MOUNT_ALTAZ);
 
     addAuxControls();
 
@@ -220,7 +222,7 @@ bool SynscanLegacyDriver::AnalyzeMount()
     bool rc = true;
     int tmp = 0;
     int bytesWritten = 0;
-    int bytesRead, numread;
+    int bytesRead;
     char res[MAX_SYN_BUF] = {0};
 
     // JM 2018-08-15 Why are we reading caps here? Looks like it serves no purpose
@@ -304,7 +306,7 @@ bool SynscanLegacyDriver::AnalyzeMount()
             {
                 // This workaround is needed because the firmware 3.39 sends these bytes swapped.
                 if (res[1] == '#')
-                    MountCode = static_cast<int>(*reinterpret_cast<unsigned char*>(&res[0]));
+                    MountCode = static_cast<int>(*reinterpret_cast<unsigned char * >(&res[0]));
                 else
                     MountCode = static_cast<int>(*reinterpret_cast<unsigned char*>(&res[1]));
             }
@@ -315,7 +317,7 @@ bool SynscanLegacyDriver::AnalyzeMount()
         memset(res, 0, MAX_SYN_BUF);
         LOG_DEBUG("CMD <t>");
         tty_write(PortFD, "t", 1, &bytesWritten);
-        numread = tty_read(PortFD, res, 2, 2, &bytesRead);
+        tty_read(PortFD, res, 2, 2, &bytesRead);
         LOGF_DEBUG("RES <%s>", res);
 
         if (res[1] == '#' && static_cast<int>(res[0]) != 0)
@@ -358,7 +360,6 @@ bool SynscanLegacyDriver::ReadScopeStatus()
 
     char res[MAX_SYN_BUF] = {0};
     int bytesWritten, bytesRead;
-    int numread;
     double ra, dec;
     long unsigned int n1, n2;
 
@@ -422,7 +423,7 @@ bool SynscanLegacyDriver::ReadScopeStatus()
     memset(res, 0, MAX_SYN_BUF);
     LOG_DEBUG("CMD <J>");
     tty_write(PortFD, "J", 1, &bytesWritten);
-    numread = tty_read(PortFD, res, 2, 2, &bytesRead);
+    tty_read(PortFD, res, 2, 2, &bytesRead);
     LOGF_DEBUG("RES <%s>", res);
     if (res[1] == '#')
     {
@@ -431,7 +432,7 @@ bool SynscanLegacyDriver::ReadScopeStatus()
     memset(res, 0, MAX_SYN_BUF);
     LOG_DEBUG("CMD <L>");
     tty_write(PortFD, "L", 1, &bytesWritten);
-    numread = tty_read(PortFD, res, 2, 2, &bytesRead);
+    tty_read(PortFD, res, 2, 2, &bytesRead);
     LOGF_DEBUG("RES <%s>", res);
     if (res[1] == '#')
     {
@@ -440,7 +441,7 @@ bool SynscanLegacyDriver::ReadScopeStatus()
     memset(res, 0, MAX_SYN_BUF);
     LOG_DEBUG("CMD <p>");
     tty_write(PortFD, "p", 1, &bytesWritten);
-    numread = tty_read(PortFD, res, 2, 2, &bytesRead);
+    tty_read(PortFD, res, 2, 2, &bytesRead);
     LOGF_DEBUG("RES <%s>", res);
     if (res[1] == '#')
     {
@@ -452,7 +453,7 @@ bool SynscanLegacyDriver::ReadScopeStatus()
     memset(res, 0, MAX_SYN_BUF);
     LOG_DEBUG("CMD <t>");
     tty_write(PortFD, "t", 1, &bytesWritten);
-    numread = tty_read(PortFD, res, 2, 2, &bytesRead);
+    tty_read(PortFD, res, 2, 2, &bytesRead);
     LOGF_DEBUG("RES <%s>", res);
     if (res[1] == '#')
     {
@@ -503,7 +504,7 @@ bool SynscanLegacyDriver::ReadScopeStatus()
             memset(res, 0, 3);
             LOG_DEBUG("CMD <L>");
             tty_write(PortFD, "L", 1, &bytesWritten);
-            numread = tty_read(PortFD, res, 2, 3, &bytesRead);
+            tty_read(PortFD, res, 2, 3, &bytesRead);
             LOGF_DEBUG("RES <%s>", res);
             if (res[0] != 48)
             {
@@ -532,7 +533,7 @@ bool SynscanLegacyDriver::ReadScopeStatus()
             memset(res, 0, MAX_SYN_BUF);
             LOG_DEBUG("CMD <z>");
             tty_write(PortFD, "z", 1, &bytesWritten);
-            numread = tty_read(PortFD, res, 18, 2, &bytesRead);
+            tty_read(PortFD, res, 18, 2, &bytesRead);
             LOGF_DEBUG("RES <%s>", res);
 
             //IDMessage(getDeviceName(),"Park Read %s %d",res,StopCount);
@@ -568,14 +569,14 @@ bool SynscanLegacyDriver::ReadScopeStatus()
             {
                 StopCount = 0;
             }
-            strncpy(LastParkRead, res, 20);
+            snprintf(LastParkRead, 20, "%.20s", res);
         }
     }
 
     memset(res, 0, MAX_SYN_BUF);
     LOG_DEBUG("CMD <e>");
     tty_write(PortFD, "e", 1, &bytesWritten);
-    numread = tty_read(PortFD, res, 18, 1, &bytesRead);
+    tty_read(PortFD, res, 18, 1, &bytesRead);
     LOGF_DEBUG("RES <%s>", res);
     if (bytesRead != 18)
     {
@@ -716,7 +717,7 @@ bool SynscanLegacyDriver::ReadScopeStatus()
 bool SynscanLegacyDriver::StartTrackMode()
 {
     char res[MAX_SYN_BUF] = {0};
-    int numread, bytesWritten, bytesRead;
+    int bytesWritten, bytesRead;
 
     TrackState = SCOPE_TRACKING;
     LOG_INFO("Tracking started.");
@@ -738,7 +739,7 @@ bool SynscanLegacyDriver::StartTrackMode()
         res[1] = 2;
     }
     tty_write(PortFD, res, 2, &bytesWritten);
-    numread = tty_read(PortFD, res, 1, 2, &bytesRead);
+    tty_read(PortFD, res, 1, 2, &bytesRead);
     if (bytesRead != 1 || res[0] != '#')
     {
         LOG_DEBUG("Timeout waiting for scope to start tracking.");
@@ -782,7 +783,6 @@ bool SynscanLegacyDriver::Goto(double ra, double dec)
         // Mount deals in J2000 coords.
         int n1 = J2000Pos.rightascension * 0x1000000 / 24;
         int n2 = J2000Pos.declination * 0x1000000 / 360;
-        int numread;
 
         LOGF_DEBUG("Goto - JNow RA: %g JNow DE: %g J2000 RA: %g J2000 DE: %g", ra, dec, J2000Pos.rightascension,
                    J2000Pos.declination);
@@ -794,7 +794,7 @@ bool SynscanLegacyDriver::Goto(double ra, double dec)
         tty_write(PortFD, res, 18, &bytesWritten);
         memset(&res[18], 0, 1);
 
-        numread = tty_read(PortFD, res, 1, 60, &bytesRead);
+        tty_read(PortFD, res, 1, 60, &bytesRead);
         if (bytesRead != 1 || res[0] != '#')
         {
             LOG_DEBUG("Timeout waiting for scope to complete goto.");
@@ -827,7 +827,7 @@ bool SynscanLegacyDriver::Goto(double ra, double dec)
 bool SynscanLegacyDriver::Park()
 {
     char res[MAX_SYN_BUF] = {0};
-    int numread, bytesWritten, bytesRead;
+    int bytesWritten, bytesRead;
 
     if (isSimulation() == false)
     {
@@ -845,7 +845,7 @@ bool SynscanLegacyDriver::Park()
         res[0] = 'T';
         res[1] = 0;
         tty_write(PortFD, res, 2, &bytesWritten);
-        numread = tty_read(PortFD, res, 1, 60, &bytesRead);
+        tty_read(PortFD, res, 1, 60, &bytesRead);
         if (bytesRead != 1 || res[0] != '#')
         {
             LOG_DEBUG("Timeout waiting for scope to stop tracking.");
@@ -854,7 +854,7 @@ bool SynscanLegacyDriver::Park()
 
         //sprintf((char *)res,"b%08X,%08X",0x0,0x40000000);
         tty_write(PortFD, "b00000000,40000000", 18, &bytesWritten);
-        numread = tty_read(PortFD, res, 1, 60, &bytesRead);
+        tty_read(PortFD, res, 1, 60, &bytesRead);
         if (bytesRead != 1 || res[0] != '#')
         {
             LOG_DEBUG("Timeout waiting for scope to respond to park.");
@@ -900,7 +900,7 @@ bool SynscanLegacyDriver::Abort()
         return true;
 
     char res[MAX_SYN_BUF] = {0};
-    int numread, bytesWritten, bytesRead;
+    int bytesWritten, bytesRead;
 
     LOG_DEBUG("Abort mount...");
     TrackState = SCOPE_IDLE;
@@ -919,7 +919,7 @@ bool SynscanLegacyDriver::Abort()
     LOGF_DEBUG("CMD <%s>", res);
     tty_write(PortFD, res, 2, &bytesWritten);
 
-    numread = tty_read(PortFD, res, 1, 2, &bytesRead);
+    tty_read(PortFD, res, 1, 2, &bytesRead);
     LOGF_DEBUG("RES <%s>", res);
 
     if (bytesRead != 1 || res[0] != '#')
@@ -1060,10 +1060,10 @@ bool SynscanLegacyDriver::ReadTime()
         char timeString[MAXINDINAME] = {0};
         time_t now = time (nullptr);
         strftime(timeString, MAXINDINAME, "%T", gmtime(&now));
-        IUSaveText(&TimeT[0], "3");
-        IUSaveText(&TimeT[1], timeString);
-        TimeTP.s = IPS_OK;
-        IDSetText(&TimeTP, nullptr);
+        TimeTP[UTC].setText("3");
+        TimeTP[OFFSET].setText(timeString);
+        TimeTP.setState(IPS_OK);
+        TimeTP.apply();
         return true;
     }
 
@@ -1105,18 +1105,18 @@ bool SynscanLegacyDriver::ReadTime()
         //  now we have time from the hand controller, we need to set some variables
         int sec;
         char utc[100];
-        char ofs[10];
+        char ofs[16] = {0};
         sec = (int)utcTime.seconds;
         sprintf(utc, "%04d-%02d-%dT%d:%02d:%02d", utcTime.years, utcTime.months, utcTime.days, utcTime.hours,
                 utcTime.minutes, sec);
         if (daylightflag == 1)
             offset = offset + 1;
-        sprintf(ofs, "%d", offset);
+        snprintf(ofs, 16, "%d", offset);
 
-        IUSaveText(&TimeT[0], utc);
-        IUSaveText(&TimeT[1], ofs);
-        TimeTP.s = IPS_OK;
-        IDSetText(&TimeTP, nullptr);
+        TimeTP[UTC].setText(utc);
+        TimeTP[OFFSET].setText(ofs);
+        TimeTP.setState(IPS_OK);
+        TimeTP.apply(nullptr);
 
         LOGF_INFO("Mount UTC Time %s Offset %d", utc, offset);
 
@@ -1131,9 +1131,9 @@ bool SynscanLegacyDriver::ReadLocation()
 
     if (isSimulation())
     {
-        LocationN[LOCATION_LATITUDE].value  = 29.5;
-        LocationN[LOCATION_LONGITUDE].value = 48;
-        IDSetNumber(&LocationNP, nullptr);
+        LocationNP[LOCATION_LATITUDE].setValue(29.5);
+        LocationNP[LOCATION_LONGITUDE].setValue(48);
+        LocationNP.apply();
         ReadLatLong = false;
         return true;
     }
@@ -1198,9 +1198,9 @@ bool SynscanLegacyDriver::ReadLocation()
                 lat = lat * -1;
             if (h == 1)
                 lon = 360 - lon;
-            LocationN[LOCATION_LATITUDE].value  = lat;
-            LocationN[LOCATION_LONGITUDE].value = lon;
-            IDSetNumber(&LocationNP, nullptr);
+            LocationNP[LOCATION_LATITUDE].setValue(lat);
+            LocationNP[LOCATION_LONGITUDE].setValue(lon);
+            LocationNP.apply();
 
             saveConfig(true, "GEOGRAPHIC_COORD");
 
@@ -1385,7 +1385,7 @@ bool SynscanLegacyDriver::Sync(double ra, double dec)
 
     LOGF_INFO("Sync JNow %g %g -> %g %g", CurrentRA, CurrentDEC, ra, dec);
     char res[MAX_SYN_BUF] = {0};
-    int numread, bytesWritten, bytesRead;
+    int bytesWritten, bytesRead;
 
     if (isSimulation())
     {
@@ -1415,7 +1415,7 @@ bool SynscanLegacyDriver::Sync(double ra, double dec)
         *reinterpret_cast<unsigned char*>(&res[6]) = (unsigned char)Az;
         res[7] = 0;
         tty_write(PortFD, res, 8, &bytesWritten);
-        numread = tty_read(PortFD, res, 1, 3, &bytesRead);
+        tty_read(PortFD, res, 1, 3, &bytesRead);
         // Assemble the Reset Position command for Alt axis
         int Alt = (int)(TargetAltAz.altitude * 16777216 / 360);
 
@@ -1432,7 +1432,7 @@ bool SynscanLegacyDriver::Sync(double ra, double dec)
         LOGF_DEBUG("CMD <%s>", res);
         tty_write(PortFD, res, 8, &bytesWritten);
 
-        numread = tty_read(PortFD, res, 1, 2, &bytesRead);
+        tty_read(PortFD, res, 1, 2, &bytesRead);
         LOGF_DEBUG("CMD <%c>", res[0]);
     }
 
@@ -1457,7 +1457,7 @@ bool SynscanLegacyDriver::Sync(double ra, double dec)
     LOGF_DEBUG("CMD <%s>", res);
     tty_write(PortFD, res, 18, &bytesWritten);
 
-    numread = tty_read(PortFD, res, 1, 60, &bytesRead);
+    tty_read(PortFD, res, 1, 60, &bytesRead);
     LOGF_DEBUG("RES <%c>", res[0]);
 
     if (bytesRead != 1 || res[0] != '#')
@@ -1529,14 +1529,14 @@ void SynscanLegacyDriver::MountSim()
 
     dt  = tv.tv_sec - ltv.tv_sec + (tv.tv_usec - ltv.tv_usec) / 1e6;
     ltv = tv;
-    double currentSlewRate = SLEW_RATE[IUFindOnSwitchIndex(&SlewRateSP)] * TRACKRATE_SIDEREAL / 3600.0;
+    double currentSlewRate = SLEW_RATE[SlewRateSP.findOnSwitchIndex()] * TRACKRATE_SIDEREAL / 3600.0;
     da  = currentSlewRate * dt;
 
-    /* Process per current state. We check the state of EQUATORIAL_COORDS and act acoordingly */
+    /* Process per current state. We check the state of EQUATORIAL_COORDS and act accordingly */
     switch (TrackState)
     {
         case SCOPE_IDLE:
-            CurrentRA += (TrackRateN[AXIS_RA].value / 3600.0 * dt) / 15.0;
+            CurrentRA += (TrackRateNP[AXIS_RA].getValue() / 3600.0 * dt) / 15.0;
             CurrentRA = range24(CurrentRA);
             break;
 

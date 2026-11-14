@@ -194,8 +194,8 @@ extern "C" {
 #define SDFITS_COLUMN_WINDDIRE (dsp_fits_column){"WINDDIRE", EXTFITS_ELEMENT_DOUBLE.typestr, EXTFITS_MEASURE_UNIT_DEGREE, "", "Degrees West of North", (char*[]){""}}
 ///Main-beam efficiency
 #define SDFITS_COLUMN_BEAMEFF (dsp_fits_column){"BEAMEFF", EXTFITS_ELEMENT_DOUBLE.typestr, EXTFITS_MEASURE_UNIT_PERCENT, "", "Main-beam efficiency", (char*[]){""}}
-///Antenna Aperature Efficiency
-#define SDFITS_COLUMN_APEREFF (dsp_fits_column){"APEREFF", EXTFITS_ELEMENT_DOUBLE.typestr, EXTFITS_MEASURE_UNIT_PERCENT, "", "Antenna Aperature Efficiency", (char*[]){""}}
+///Antenna Aperture Efficiency
+#define SDFITS_COLUMN_APEREFF (dsp_fits_column){"APEREFF", EXTFITS_ELEMENT_DOUBLE.typestr, EXTFITS_MEASURE_UNIT_PERCENT, "", "Antenna Aperture Efficiency", (char*[]){""}}
 ///Rear spillover
 #define SDFITS_COLUMN_ETAL (dsp_fits_column){"ETAL", EXTFITS_ELEMENT_DOUBLE.typestr, "", "", "Rear spillover", (char*[]){""}}
 ///Accounts for forward loss
@@ -294,7 +294,7 @@ SDFITS_COLUMN_EQUINOX, \
 * \param maxis The sizes of the data matrix
 * \return dsp_fits_row pointer describing the fits file content
 */
-dsp_fits_row *dsp_fits_read_sdfits(char *filename, long *nstreams, long *maxes, long **maxis);
+DLL_EXPORT dsp_fits_row *dsp_fits_read_sdfits(char *filename, long *nstreams, long *maxes, long **maxis);
 /**\}*/
 
 #ifdef __cplusplus

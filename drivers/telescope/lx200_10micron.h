@@ -22,6 +22,8 @@
 
 #include "lx200generic.h"
 
+#include <chrono>
+
 class LX200_10MICRON : public LX200Generic
 {
     public:
@@ -97,6 +99,40 @@ class LX200_10MICRON : public LX200Generic
             ALIGN_COUNT
         };
 
+        enum LX200_10MICRON_MERIDIAN_LIMITS
+        {
+            MERIDIAN_LIMIT_SLEW,
+            MERIDIAN_LIMIT_TRACK,
+            MERIDIAN_LIMIT_COUNT
+        };
+
+        // Same order and values as :GMF# and :SMFn# minus 1
+        enum LX200_10MICRON_ALLOWED_MERIDIAN_SIDE
+        {
+            MERIDIAN_SIDE_BOTH,
+            MERIDIAN_SIDE_WEST_ONLY,
+            MERIDIAN_SIDE_EAST_ONLY,
+            MERIDIAN_SIDE_COUNT
+        };
+
+        // Why a mount setting is read, which decides what is logged and sent to clients:
+        // at connect, by the periodic refresh (changes made elsewhere), or right after writing it.
+        enum LX200_10MICRON_READ_CONTEXT
+        {
+            READ_AT_CONNECT,
+            READ_PERIODIC,
+            READ_AFTER_WRITE
+        };
+
+        // Same element order as TELESCOPE_PIER_SIDE, plus NONE
+        enum LX200_10MICRON_TARGET_PIER_SIDE
+        {
+            TARGET_PIER_WEST,
+            TARGET_PIER_EAST,
+            TARGET_PIER_NONE,
+            TARGET_PIER_COUNT
+        };
+
         LX200_10MICRON();
         ~LX200_10MICRON() {}
 
@@ -107,14 +143,24 @@ class LX200_10MICRON : public LX200Generic
         const char *getDefaultName() override;
         bool Handshake() override;
         bool initProperties() override;
+        void ISGetProperties(const char *dev) override;
         bool updateProperties() override;
         bool saveConfigItems(FILE *fp) override;
         bool ReadScopeStatus() override;
         bool Park() override;
         bool UnPark() override;
-        bool flip();
+        bool SetTrackEnabled(bool enabled) override;
+        bool Flip(double ra, double dec) override;
         bool getUnattendedFlipSetting();
         bool setUnattendedFlipSetting(bool setting);
+        void updateUnattendedFlipSetting(LX200_10MICRON_READ_CONTEXT context);
+        bool confirmUnattendedFlipSetting(int wanted);
+        bool getMeridianLimits(LX200_10MICRON_READ_CONTEXT context);
+        bool setMeridianLimits(int slewLimit, int trackLimit);
+        bool getTimeToTrackingEnd();
+        bool getAllowedMeridianSide(LX200_10MICRON_READ_CONTEXT context);
+        bool setAllowedMeridianSide(int side);
+        bool getTargetPierSide();
         bool SyncConfigBehaviour(bool cmcfg);
         bool setLocalDate(uint8_t days, uint8_t months, uint16_t years) override;
         bool SetTLEtoFollow(const char *tle);
@@ -128,7 +174,7 @@ class LX200_10MICRON : public LX200Generic
         // TODO move these things elsewhere
         int monthToNumber(const char *monthName);
         int setStandardProcedureWithoutRead(int fd, const char *data);
-        int setStandardProcedureAndExpect(int fd, const char *data, const char *expect);
+        int setStandardProcedureAndExpectChar(int fd, const char *data, const char *expect);
         int setStandardProcedureAndReturnResponse(int fd, const char *data, char *response, int max_response_length);
 
     protected:
@@ -175,10 +221,33 @@ class LX200_10MICRON : public LX200Generic
         INumber TLEfromDatabaseN[1];
         INumberVectorProperty TLEfromDatabaseNP;
 
+        // Wake on LAN
+        IText WoLMacT[1] {};
+        ITextVectorProperty WoLMacTP;
+        ISwitch WoLSendS[1];
+        ISwitchVectorProperty WoLSendSP;
+
+        // Shutdown
+        INDI::PropertySwitch MountShutdownSP {1};
+
+        // Meridian
+        INDI::PropertyNumber MeridianLimitsNP {MERIDIAN_LIMIT_COUNT};
+        INDI::PropertyNumber TrackingEndNP {1};
+        INDI::PropertySwitch AllowedMeridianSideSP {MERIDIAN_SIDE_COUNT};
+        INDI::PropertySwitch TargetPierSideSP {TARGET_PIER_COUNT};
 
     private:
         int fd = -1; // short notation for PortFD/sockfd
         bool getMountInfo();
+        bool flip();
+        bool sendWakeOnLanPacket();
+        bool m_ShutdownPending { false };
+        void TimerHit() override;
+
+        // Meridian values are polled less often than Ginfo, see ReadScopeStatus
+        void updateMeridianValues(bool all);
+        std::chrono::steady_clock::time_point lastMeridianFastPoll;
+        std::chrono::steady_clock::time_point lastMeridianSlowPoll;
 
         int OldGstat = GSTAT_UNSET;
         struct _Ginfo

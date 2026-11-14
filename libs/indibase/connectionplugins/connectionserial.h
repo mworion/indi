@@ -21,9 +21,12 @@
 #pragma once
 
 #include "connectioninterface.h"
+#include "indipropertytext.h"
+#include "indipropertyswitch.h"
 
 #include <string>
 #include <vector>
+#include <cstdint>
 
 namespace Connection
 {
@@ -43,9 +46,9 @@ class Serial : public Interface
          * \brief Supported baud rates
          * \note: Default baud rate is 9600. To change default baud rate, use setDefaultBaudrate(..) function.
          */
-        typedef enum { B_9600, B_19200, B_38400, B_57600, B_115200, B_230400 } BaudRate;
+        typedef enum { B_1200, B_2400, B_4800, B_9600, B_19200, B_38400, B_57600, B_115200, B_230400, B_COUNT } BaudRate;
 
-        Serial(INDI::DefaultDevice *dev);
+        Serial(INDI::DefaultDevice *dev, IPerm permission = IP_RW);
         virtual ~Serial();
 
         virtual bool Connect() override;
@@ -71,7 +74,7 @@ class Serial : public Interface
          */
         virtual const char *port()
         {
-            return PortT[0].text;
+            return PortTP[0].getText();
         }
 
         /**
@@ -92,6 +95,24 @@ class Serial : public Interface
          * @param newRate Desired new rate
          */
         void setDefaultBaudRate(BaudRate newRate);
+
+        /**
+         * @brief setPortMatchPattern Set a regex pattern used to automatically select a serial port
+         * from the discovered system ports. When the system ports are scanned, if any port path
+         * matches this pattern AND the previously-saved config port is no longer available (neither
+         * detected among the system ports nor still present on disk), the first matching port is
+         * automatically selected as the active port.
+         *
+         * This is particularly useful for devices whose USB serial paths embed the device name
+         * (e.g. Pegasus Astro devices under /dev/serial/by-id/), allowing the correct port to be
+         * selected without blind handshake attempts against every port.
+         *
+         * Call this function in initProperties() of your driver. The matching is case-insensitive.
+         * If the pattern is empty (the default), no auto-selection is performed.
+         *
+         * @param pattern Case-insensitive regex pattern (e.g. "FocusCube", "FlatMaster", "Falcon")
+         */
+        void setPortMatchPattern(const std::string &pattern);
 
         /**
          * @return Return port file descriptor. If connection is successful, PortFD is a positive
@@ -169,20 +190,16 @@ class Serial : public Interface
         };
 
         // Device physical port
-        ITextVectorProperty PortTP;
-        IText PortT[1] {};
+        INDI::PropertyText PortTP {1};
 
-        ISwitch BaudRateS[6];
-        ISwitchVectorProperty BaudRateSP;
+        INDI::PropertySwitch BaudRateSP {B_COUNT};
 
-        ISwitch AutoSearchS[2];
-        ISwitchVectorProperty AutoSearchSP;
+        INDI::PropertySwitch AutoSearchSP {2};
 
-        ISwitch *SystemPortS = nullptr;
-        ISwitchVectorProperty SystemPortSP;
+        // Dynamically populated from the ports detected on the system
+        INDI::PropertySwitch SystemPortSP {0};
 
-        ISwitch RefreshS[1];
-        ISwitchVectorProperty RefreshSP;
+        INDI::PropertySwitch RefreshSP {1};
 
         int PortFD = -1;
 
@@ -191,8 +208,12 @@ class Serial : public Interface
         uint8_t parity = 0;
         uint8_t stopBits = 1;
 
+        IPerm m_Permission = IP_RW;
+
         std::string m_ConfigPort;
         int m_ConfigBaudRate {-1};
         std::vector<std::string> m_SystemPorts;
+        // Optional regex pattern for auto-selecting a port by device name (e.g. Pegasus devices)
+        std::string m_PortMatchPattern;
 };
 }

@@ -34,7 +34,7 @@
 
 static std::unique_ptr<TitanTCS> titanTCS(new TitanTCS());
 
-TitanTCS::TitanTCS()
+TitanTCS::TitanTCS() : GI(this)
 {
     setVersion(1, 0);
 
@@ -45,7 +45,7 @@ TitanTCS::TitanTCS()
         TELESCOPE_CAN_ABORT |
         TELESCOPE_HAS_TIME |
         TELESCOPE_HAS_LOCATION |
-        //TELESCOPE_HAS_PIER_SIDE |
+        TELESCOPE_HAS_PIER_SIDE |
 #if USE_PEC
         TELESCOPE_HAS_PEC |
 #endif
@@ -97,7 +97,7 @@ bool TitanTCS::initProperties()
     //
     INDI::Telescope::initProperties();
 
-    initGuiderProperties(getDeviceName(), GUIDE_TAB);
+    GI::initProperties(GUIDE_TAB);
     setDriverInterface(getDriverInterface() | GUIDER_INTERFACE);
 
     AddTrackMode("TRACK_SIDEREAL", "Sidereal");
@@ -126,6 +126,14 @@ bool TitanTCS::initProperties()
     IUFillTextVector(&MountInfoTP, MountInfoT, 2, getDeviceName(), "MOUNT_INFOS", "Mount Info", MAIN_CONTROL_TAB,
                      IP_RO, 60, IPS_IDLE);
 
+    // Park mode, mirroring the two options in the TitanTCS ASCOM application:
+    // park at the saved point (':hP1#', default) or lock at the current
+    // position (':hP8#'). See Park() for details.
+    ParkModeSP[PARK_MODE_AT_CURRENT].fill("PARK_MODE_AT_CURRENT", "At current position", ISS_OFF);
+    ParkModeSP[PARK_MODE_AT_SAVED].fill("PARK_MODE_AT_SAVED", "At saved position", ISS_ON);
+    ParkModeSP.fill(getDeviceName(), "PARK_MODE", "Park", OPTIONS_TAB, IP_RW, ISR_1OFMANY, 60, IPS_IDLE);
+    ParkModeSP.load();
+
     TrackState = SCOPE_IDLE;
 
     return true;
@@ -143,13 +151,26 @@ bool TitanTCS::updateProperties()
         defineProperty(&PECInfoTP);
 #endif
         defineProperty(&MountInfoTP);
+        defineProperty(ParkModeSP);
         //
-        defineProperty(&GuideNSNP);
-        defineProperty(&GuideWENP);
-        //
-        IUResetSwitch(&TrackModeSP);
-        TrackModeS[TRACK_SIDEREAL].s = ISS_ON;
+        TrackModeSP.reset();
+        TrackModeSP[TRACK_SIDEREAL].setState(ISS_ON);
         TrackState = SCOPE_TRACKING;
+        //
+        // Load saved park position, or fall back to sensible defaults (pole).
+        if(InitPark())
+        {
+            LOG_INFO("Park data loaded from file.");
+        }
+        else
+        {
+            // No saved park data — default to the celestial pole, which is
+            // where this mount physically parks (telescope points north).
+            SetAxis1ParkDefault(0.0);
+            SetAxis2ParkDefault(LocationNP[LOCATION_LATITUDE].getValue() >= 0 ? 90.0 : -90.0);
+            SetAxis1Park(0.0);
+            SetAxis2Park(LocationNP[LOCATION_LATITUDE].getValue() >= 0 ? 90.0 : -90.0);
+        }
         //
         GetMountParams();
     }
@@ -160,39 +181,20 @@ bool TitanTCS::updateProperties()
         deleteProperty(PECInfoTP.name);
 #endif
         deleteProperty(MountInfoTP.name);
+        deleteProperty(ParkModeSP);
         //
-        deleteProperty(GuideNSNP.name);
-        deleteProperty(GuideWENP.name);
     }
+
+    GI::updateProperties();
 
     return true;
 }
 
 bool TitanTCS::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
 {
-    if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
-    {
-        /*
-        if (strcmp(name, "JOG_RATE") == 0) {
-            IUUpdateNumber(&JogRateNP, values, names, n);
-            JogRateNP.s = IPS_OK;
-            IDSetNumber(&JogRateNP, nullptr);
-            return true;
-        }
-        if (strcmp(name, GuideRateNP.name) == 0) {
-            IUUpdateNumber(&GuideRateNP, values, names, n);
-            GuideRateNP.s = IPS_OK;
-            IDSetNumber(&GuideRateNP, nullptr);
-            return true;
-        }
-        */
-        if (strcmp(name, GuideNSNP.name) == 0 || strcmp(name, GuideWENP.name) == 0)
-        {
-            LOGF_DEBUG("%s = %g", name, values[0]);
-            processGuiderProperties(name, values, names, n);
-            return true;
-        }
-    }
+    // Check guider interface
+    if (GI::processNumber(dev, name, values, names, n))
+        return true;
 
     return INDI::Telescope::ISNewNumber(dev, name, values, names, n);
 }
@@ -201,45 +203,33 @@ bool TitanTCS::ISNewSwitch(const char *dev, const char *name, ISState *states, c
 {
     if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
     {
-        int iVal = 0;
         // ---------------------------------------------------------------------
-        // Park $$$
-        if (!strcmp(name, ParkSP.name))
+        // Park — let base class handle IsParked flag and property updates.
+        // Our Park()/UnPark() functions are called by the base class, and
+        // GetMountParams() updates TrackState from the mount's reported status.
+        // ---------------------------------------------------------------------
+        if (ParkModeSP.isNameMatch(name))
         {
-            IUUpdateSwitch(&ParkSP, states, names, n);
-            int nowIndex = IUFindOnSwitchIndex(&ParkSP);
-            if(nowIndex == 0)
-                Park();
-            else if(nowIndex == 1)
-                UnPark();
+            ParkModeSP.update(states, names, n);
+            ParkModeSP.setState(IPS_OK);
+            ParkModeSP.apply();
+            saveConfig(true, ParkModeSP.getName());
 
-            if(CommandResponse("#:hP?#", "$hP", '#', NULL, &iVal))
-            {
-                if(TrackState == SCOPE_PARKING)
-                {
-                    if(iVal == 2)
-                        TrackState = SCOPE_PARKED;
-                    else if(iVal == 0)
-                        TrackState = SCOPE_IDLE;
-                }
-                else if(TrackState == SCOPE_PARKED)
-                {
-                    if(iVal == 0)
-                        TrackState = SCOPE_IDLE;
-                }
-            }
+            if(ParkModeSP.findOnSwitchIndex() == PARK_MODE_AT_CURRENT)
+                LOG_INFO("Park mode: lock the mount at its current position.");
+            else
+                LOG_INFO("Park mode: slew to the saved park position, then lock.");
 
             return true;
         }
-        //
 #if USE_PEC
-        if (!strcmp(name, PECStateSP.name))
+        if (PECStateSP.isNameMatch(name))
         {
             //int preIndex = IUFindOnSwitchIndex(&PECStateSP);
-            IUUpdateSwitch(&PECStateSP, states, names, n);
-            int nowIndex = IUFindOnSwitchIndex(&PECStateSP);
+            PECStateSP.update(states, names, n);
+            int nowIndex = PECStateSP.findOnSwitchIndex();
 
-            IDSetSwitch(&PECStateSP, nullptr);
+            PECStateSP.apply();
 
             if(nowIndex == 0)
             {
@@ -272,12 +262,12 @@ bool TitanTCS::ISNewSwitch(const char *dev, const char *name, ISState *states, c
         }
 #endif
         //
-        if (!strcmp(name, TrackStateSP.name))
+        if (TrackStateSP.isNameMatch(name))
         {
-            IUUpdateSwitch(&TrackStateSP, states, names, n);
-            int nowIndex = IUFindOnSwitchIndex(&TrackStateSP);
+            TrackStateSP.update(states, names, n);
+            int nowIndex = TrackStateSP.findOnSwitchIndex();
 
-            IDSetSwitch(&TrackStateSP, nullptr);
+            TrackStateSP.apply();
 
             if(nowIndex == 0)
             {
@@ -290,12 +280,12 @@ bool TitanTCS::ISNewSwitch(const char *dev, const char *name, ISState *states, c
             return true;
         }
         //
-        if (!strcmp(name, TrackModeSP.name))
+        if (TrackModeSP.isNameMatch(name))
         {
-            IUUpdateSwitch(&TrackModeSP, states, names, n);
-            int nowIndex = IUFindOnSwitchIndex(&TrackModeSP);
+            TrackModeSP.update(states, names, n);
+            int nowIndex = TrackModeSP.findOnSwitchIndex();
 
-            IDSetSwitch(&TrackModeSP, nullptr);
+            TrackModeSP.apply();
 
             SetTrackMode(nowIndex);
 
@@ -518,7 +508,7 @@ IPState TitanTCS::GuideNorth(uint32_t ms)
 {
     SendCommand(":Mgn%d#", (int)ms);
     //
-    if(MovementNSSP.s == IPS_BUSY)
+    if(MovementNSSP.getState() == IPS_BUSY)
         return IPS_ALERT;
 
     if (GuideNSTID)
@@ -535,7 +525,7 @@ IPState TitanTCS::GuideSouth(uint32_t ms)
 {
     SendCommand(":Mgs%d#", (int)ms);
     //
-    if(MovementNSSP.s == IPS_BUSY)
+    if(MovementNSSP.getState() == IPS_BUSY)
         return IPS_ALERT;
 
     if (GuideNSTID)
@@ -552,7 +542,7 @@ IPState TitanTCS::GuideEast(uint32_t ms)
 {
     SendCommand(":Mge%d#", (int)ms);
     //
-    if(MovementWESP.s == IPS_BUSY)
+    if(MovementWESP.getState() == IPS_BUSY)
         return IPS_ALERT;
 
     if (GuideWETID)
@@ -569,7 +559,7 @@ IPState TitanTCS::GuideWest(uint32_t ms)
 {
     SendCommand(":Mgw%d#", (int)ms);
     //
-    if(MovementWESP.s == IPS_BUSY)
+    if(MovementWESP.getState() == IPS_BUSY)
         return IPS_ALERT;
 
     if (GuideWETID)
@@ -610,10 +600,18 @@ bool TitanTCS::Goto(double ra, double dec)
     if(rtnCode != '0')
     {
         LOGF_ERROR("Goto / Error Code = '%c'", rtnCode);
+        // Send abort to clear the mount's internal goto-error state.
+        // Without this, the firmware retains the failed target and may
+        // set tracking status bit5 (goto-error flag), which can cause
+        // the mount to self-park after a timeout.
+        SendCommand("#:Q#");
         return false;
     }
 
     TrackState = SCOPE_SLEWING;
+    // Reset lightweight-poll completion detection for the new slew
+    m_HaveLastPos = false;
+    m_StableCount = 0;
 
     LOG_INFO("Slewing ...");
     return true;
@@ -638,7 +636,19 @@ bool TitanTCS::ReadScopeStatus()
 {
     LOGF_DEBUG("ReadScopeStatus(s %d)", TrackState);
 
-    GetMountParams();
+    // During slewing/parking, use lightweight individual queries to avoid
+    // overloading the firmware's command processor. The composite \GE command
+    // requires significant parsing time which can interfere with step
+    // generation and cause the RA motor to stall.
+    // When tracking/idle, use the full composite query for efficiency.
+    if(TrackState == SCOPE_SLEWING || TrackState == SCOPE_PARKING)
+    {
+        GetMountParamsLight();
+    }
+    else
+    {
+        GetMountParams();
+    }
 
     return true;
 }
@@ -681,7 +691,7 @@ bool TitanTCS::GetParamStr(const char* pInStr, char* pOutStr, int len, const cha
             break;
     }
 
-    strncpy(pOutStr, pInStr, len);
+    snprintf(pOutStr, len, "%s", pInStr);
 
     if(delimeter)
     {
@@ -998,20 +1008,20 @@ bool TitanTCS::SetTarget(double ra, double dec)
 
 void TitanTCS::guideTimeoutNS()
 {
-    GuideNSNP.np[0].value = 0;
-    GuideNSNP.np[1].value = 0;
-    GuideNSNP.s           = IPS_IDLE;
+    GuideNSNP[0].setValue(0);
+    GuideNSNP[1].setValue(0);
+    GuideNSNP.setState(IPS_IDLE);
     GuideNSTID            = 0;
-    IDSetNumber(&GuideNSNP, nullptr);
+    GuideNSNP.apply();
 }
 
 void TitanTCS::guideTimeoutWE()
 {
-    GuideWENP.np[0].value = 0;
-    GuideWENP.np[1].value = 0;
-    GuideWENP.s           = IPS_IDLE;
+    GuideWENP[0].setValue(0);
+    GuideWENP[1].setValue(0);
+    GuideWENP.setState(IPS_IDLE);
     GuideWETID            = 0;
-    IDSetNumber(&GuideWENP, nullptr);
+    GuideWENP.apply();
 }
 
 void TitanTCS::guideTimeoutHelperNS(void * p)
@@ -1022,6 +1032,77 @@ void TitanTCS::guideTimeoutHelperNS(void * p)
 void TitanTCS::guideTimeoutHelperWE(void * p)
 {
     static_cast<TitanTCS *>(p)->guideTimeoutWE();
+}
+
+bool TitanTCS::GetMountParamsLight()
+{
+    // Lightweight polling during slewing — individual short LX200 queries only.
+    // This avoids the composite \GE command which can overload the firmware's
+    // command processor and cause RA motor stalls during high-speed slewing.
+
+    double ra = 0, dec = 0;
+
+    // Get RA via standard LX200 :GR# command
+    if(!CommandResponseHour("#:GR#", "", '#', &ra))
+    {
+        LOG_ERROR("GetMountParamsLight: failed to read RA");
+        return false;
+    }
+
+    // Get DEC via standard LX200 :GD# command
+    if(!CommandResponseHour("#:GD#", "", '#', &dec))
+    {
+        LOG_ERROR("GetMountParamsLight: failed to read DEC");
+        return false;
+    }
+
+    LOGF_DEBUG("RA %g, DEC %g", ra, dec);
+    NewRaDec(ra, dec);
+
+    // Detect slew/park completion by watching for the position to stop changing.
+    // We only fire the (heavy) composite status query once the mount has clearly
+    // STOPPED — at that point the motors are idle and the composite command is
+    // safe (it only causes stalls during active high-speed slewing).
+    //
+    // To avoid firing during a slow deceleration phase (where a single sample
+    // might dip below threshold while still moving), we require TWO consecutive
+    // stable samples before declaring the mount stopped.
+    if(m_HaveLastPos)
+    {
+        double dRA = fabs(ra - m_LastRA);
+        double dDEC = fabs(dec - m_LastDEC);
+        // Handle RA wraparound across 0h/24h (e.g. crossing the pole)
+        if(dRA > 12.0)
+            dRA = 24.0 - dRA;
+
+        // Threshold ~0.01h (9 arcsec/poll) — well above sidereal drift (~0.07
+        // arcmin/poll) but far below any real slew speed.
+        bool stable = (dRA < 0.01 && dDEC < 0.01);
+
+        if(stable)
+        {
+            m_StableCount++;
+            if(m_StableCount >= 2)
+            {
+                // Mount has stopped moving — safe to query full status now.
+                m_HaveLastPos = false;
+                m_StableCount = 0;
+                LOG_DEBUG("Slew/park appears complete, querying full status");
+                GetMountParams();
+                return true;
+            }
+        }
+        else
+        {
+            m_StableCount = 0;
+        }
+    }
+
+    m_LastRA = ra;
+    m_LastDEC = dec;
+    m_HaveLastPos = true;
+
+    return true;
 }
 
 bool TitanTCS::GetMountParams(bool bAll)
@@ -1054,6 +1135,16 @@ bool TitanTCS::GetMountParams(bool bAll)
         {
             LOGF_DEBUG("RA %g, DEC %g", info.ra, info.dec);
             NewRaDec(info.ra, info.dec);
+
+            // Report pier side for Ekos meridian-flip automation. This mount's
+            // LX200 subset exposes no pier-side query (the ASCOM driver derives
+            // it from a separate encoder protocol we don't use), so we report the
+            // INDI-convention expected side computed from the hour angle:
+            //   HA <= 0 -> PIER_WEST, HA > 0 -> PIER_EAST.
+            // NOTE: this is the INDI convention Ekos expects; its label reads
+            // OPPOSITE to the ASCOM app's SideOfPier for the same position — that
+            // is a known INDI/ASCOM naming difference, not an error.
+            setPierSide(expectedPierSide(info.ra));
         }
     }
 
@@ -1071,9 +1162,34 @@ bool TitanTCS::GetMountParams(bool bAll)
     {
         LOGF_DEBUG("Tracking Status %d", info.TrackingStatus);
 
-        if(info.TrackingStatus & 0x3C)
+        // Bits 2-3 indicate actual axis motion (RA/DEC slewing).
+        // Bits 4-5 are goto status flags. Bit5 alone (value 0x20) can
+        // indicate a goto-error/pending state where the mount is NOT
+        // physically moving. Only treat as SLEWING when axes are
+        // actually in motion (bits 2-3) or a valid goto is active
+        // (bit4 set together with motion).
+        bool axisMoving = (info.TrackingStatus & 0x0C) != 0;   // bit2 or bit3: RA/DEC slew
+        bool gotoActive = (info.TrackingStatus & 0x30) != 0;   // bit4 or bit5: goto status
+
+        if(axisMoving)
         {
             TrackState = SCOPE_SLEWING;
+        }
+        else if(gotoActive && !(info.TrackingStatus & 0x03))
+        {
+            // Goto flag set but no tracking bits — mount stopped, error state
+            LOGF_WARN("Goto error state detected (tracking status %d), sending abort", info.TrackingStatus);
+            SendCommand("#:Q#");
+            TrackState = SCOPE_IDLE;
+        }
+        else if(gotoActive && (info.TrackingStatus & 0x03))
+        {
+            // Goto flag set but mount is still tracking (e.g. status 35 = 0x23)
+            // This is the goto-error state where axes track but goto failed.
+            // Clear it and remain in tracking.
+            LOGF_WARN("Goto error flag with tracking active (status %d), sending abort", info.TrackingStatus);
+            SendCommand("#:Q#");
+            TrackState = SCOPE_TRACKING;
         }
         else if(info.TrackingStatus == 3)
         {
@@ -1092,36 +1208,39 @@ bool TitanTCS::GetMountParams(bool bAll)
         if(info.Parking == 1)
         {
             TrackState = SCOPE_PARKING;
-            ParkS[0].s = ISS_ON;
-            ParkS[1].s = ISS_OFF;
-            ParkSP.s   = IPS_BUSY;
+            IsParked = false;
+            ParkSP[PARK].setState(ISS_ON);
+            ParkSP[UNPARK].setState(ISS_OFF);
+            ParkSP.setState(IPS_BUSY);
             IUSaveText(&MountInfoT[0], "Parking");
         }
         else if(info.Parking == 2)
         {
             TrackState = SCOPE_PARKED;
-            ParkS[0].s = ISS_ON;
-            ParkS[1].s = ISS_OFF;
-            ParkSP.s   = IPS_IDLE;
+            IsParked = true;
+            ParkSP[PARK].setState(ISS_ON);
+            ParkSP[UNPARK].setState(ISS_OFF);
+            ParkSP.setState(IPS_IDLE);
             IUSaveText(&MountInfoT[0], "Parked");
         }
         else if(info.Parking == 0)
         {
-            ParkSP.s   = IPS_IDLE;
-            ParkS[0].s = ISS_OFF;
-            ParkS[1].s = ISS_ON;
+            IsParked = false;
+            ParkSP.setState(IPS_IDLE);
+            ParkSP[PARK].setState(ISS_OFF);
+            ParkSP[UNPARK].setState(ISS_ON);
             IUSaveText(&MountInfoT[0], "Unpark");
         }
 
-        IDSetSwitch(&ParkSP, nullptr);
+        ParkSP.apply();
     }
     // Tracking On / Off
     if((TrackState == SCOPE_SLEWING) || (TrackState == SCOPE_PARKING) || (TrackState == SCOPE_PARKED))
     {
-        TrackStateS[TRACK_ON].s = ISS_OFF;
-        TrackStateS[TRACK_OFF].s = ISS_ON;
-        TrackStateSP.s = IPS_IDLE;
-        IDSetSwitch(&TrackStateSP, nullptr);
+        TrackStateSP[TRACK_ON].setState(ISS_OFF);
+        TrackStateSP[TRACK_OFF].setState(ISS_ON);
+        TrackStateSP.setState(IPS_IDLE);
+        TrackStateSP.apply();
 
         if(TrackState == SCOPE_PARKING)
             IUSaveText(&MountInfoT[1], "Parking");
@@ -1138,19 +1257,19 @@ bool TitanTCS::GetMountParams(bool bAll)
 
             if((TrackState == SCOPE_TRACKING) && (info.Landscape == 0))
             {
-                TrackStateS[TRACK_ON].s = ISS_ON;
-                TrackStateS[TRACK_OFF].s = ISS_OFF;
-                TrackStateSP.s = IPS_IDLE;
-                IDSetSwitch(&TrackStateSP, nullptr);
+                TrackStateSP[TRACK_ON].setState(ISS_ON);
+                TrackStateSP[TRACK_OFF].setState(ISS_OFF);
+                TrackStateSP.setState(IPS_IDLE);
+                TrackStateSP.apply();
 
                 IUSaveText(&MountInfoT[1], "Tracking ON / Skyview");
             }
             else
             {
-                TrackStateS[TRACK_ON].s = ISS_OFF;
-                TrackStateS[TRACK_OFF].s = ISS_ON;
-                TrackStateSP.s = IPS_IDLE;
-                IDSetSwitch(&TrackStateSP, nullptr);
+                TrackStateSP[TRACK_ON].setState(ISS_OFF);
+                TrackStateSP[TRACK_OFF].setState(ISS_ON);
+                TrackStateSP.setState(IPS_IDLE);
+                TrackStateSP.apply( nullptr);
 
                 if(info.Landscape == 1)
                     IUSaveText(&MountInfoT[1], "Tracking OFF / Landscape");
@@ -1167,10 +1286,10 @@ bool TitanTCS::GetMountParams(bool bAll)
     {
         LOGF_DEBUG("Tracking rate %d", info.TrackingRate);
 
-        TrackModeS[0].s = info.TrackingRate == 0 ? ISS_ON : ISS_OFF;
-        TrackModeS[1].s = info.TrackingRate == 1 ? ISS_ON : ISS_OFF;
-        TrackModeS[2].s = info.TrackingRate == 2 ? ISS_ON : ISS_OFF;
-        IDSetSwitch(&TrackModeSP, nullptr);
+        TrackModeSP[0].setState(info.TrackingRate == 0 ? ISS_ON : ISS_OFF);
+        TrackModeSP[1].setState(info.TrackingRate == 1 ? ISS_ON : ISS_OFF);
+        TrackModeSP[2].setState(info.TrackingRate == 2 ? ISS_ON : ISS_OFF);
+        TrackModeSP.apply();
     }
     //
     static int prev_TrackState = -1;
@@ -1236,26 +1355,26 @@ void TitanTCS::_setPECState(int pec_status)
             // Valid
             if(pec_status & 1)
             {
-                PECStateS[PEC_OFF].s = ISS_OFF;
-                PECStateS[PEC_ON].s  = ISS_ON;
+                PECStateSP[PEC_OFF].setState(ISS_OFF);
+                PECStateSP[PEC_ON].setState(ISS_ON);
 
                 IUSaveText(&PECInfoT[0], "PEC is running.");
             }
             else
             {
-                PECStateS[PEC_OFF].s = ISS_OFF;
-                PECStateS[PEC_ON].s  = ISS_ON;
+                PECStateSP[PEC_OFF].setState(ISS_OFF);
+                PECStateSP[PEC_ON].setState(ISS_ON);
 
                 IUSaveText(&PECInfoT[0], "PEC is available.");
             }
-            PECStateSP.s = IPS_OK;
+            PECStateSP.setState(IPS_OK);
         }
         else
         {
             // Invalid
-            PECStateS[PEC_OFF].s = ISS_OFF;
-            PECStateS[PEC_ON].s  = ISS_OFF;
-            PECStateSP.s = IPS_ALERT;
+            PECStateSP[PEC_OFF].setState(ISS_OFF);
+            PECStateSP[PEC_ON].setState(ISS_OFF);
+            PECStateSP.setState(IPS_ALERT);
 
             if(pec_status & 0x30)
                 IUSaveText(&PECInfoT[0], "");
@@ -1263,8 +1382,8 @@ void TitanTCS::_setPECState(int pec_status)
                 IUSaveText(&PECInfoT[0], "PEC training is required.");
         }
 
-        PECStateSP.s = IPS_OK;
-        IDSetSwitch(&PECStateSP, nullptr);
+        PECStateSP.setState(IPS_OK);
+        PECStateSP.apply();
 
         PECTrainingSP.s = IPS_OK;
         IDSetSwitch(&PECTrainingSP, nullptr);
@@ -1415,17 +1534,34 @@ bool TitanTCS::MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command)
     return SendCommand(szCommand);
 }
 // -----------------------------------------------------------------------------
+// Park. Two modes, selectable via the "Park" property on the Options tab, using
+// the mount's own firmware park commands (decoded from the TitanTCS ASCOM driver
+// serial trace):
+//
+//  PARK_MODE_AT_SAVED (default): ':hP1#' — the firmware moves to the saved park
+//    point and parks. The park point is stored in the mount (see SetCurrentPark,
+//    ':hS#'). The firmware knows the true MECHANICAL position, so this reaches
+//    the correct home on the correct side of the pier every time — something the
+//    driver cannot compute from sky coordinates near the pole.
+//
+//  PARK_MODE_AT_CURRENT: ':hP8#' — park (lock) wherever the mount currently points.
 bool TitanTCS::Park()
 {
-    LOG_INFO("Parking ...");
+    bool atCurrent = (ParkModeSP.findOnSwitchIndex() == PARK_MODE_AT_CURRENT);
+    const char *cmd = atCurrent ? ":hP8#" : ":hP1#";
 
-    if(SendCommand(":hP8#"))
-    {
-        ParkSP.s   = IPS_BUSY;
-        TrackState = SCOPE_PARKING;
-        return true;
-    }
-    return false;
+    LOGF_INFO("Parking (%s) ...", atCurrent ? "at current position" : "to saved park point");
+
+    if(!SendCommand(cmd))
+        return false;
+
+    ParkSP.setState(IPS_BUSY);
+    TrackState = SCOPE_PARKING;
+    // The firmware performs any slew and the lock itself. Reset the lightweight
+    // poll detector so completion (mount stopped + $hP=2) transitions to PARKED.
+    m_HaveLastPos = false;
+    m_StableCount = 0;
+    return true;
 }
 // -----------------------------------------------------------------------------
 bool TitanTCS::UnPark()
@@ -1434,8 +1570,11 @@ bool TitanTCS::UnPark()
 
     if(SendCommand(":hP0#"))
     {
-        ParkSP.s   = IPS_BUSY;
-        TrackState = SCOPE_PARKING;
+        ParkSP.setState(IPS_BUSY);
+        // Set to IDLE temporarily — GetMountParams() will update to
+        // SCOPE_TRACKING once the mount reports tracking status 3.
+        TrackState = SCOPE_IDLE;
+        SetParked(false);
         return true;
     }
     return false;
@@ -1473,19 +1612,51 @@ bool TitanTCS::SetTrackEnabled(bool enabled)
 // -----------------------------------------------------------------------------
 bool TitanTCS::SetParkPosition(double Axis1Value, double Axis2Value)
 {
-    INDI_UNUSED(Axis1Value);
-    INDI_UNUSED(Axis2Value);
-
+    // Park data type is PARK_HA_DEC, so Axis1 = Hour Angle, Axis2 = DEC.
+    // The base class stores these values; the driver just accepts them.
+    SetAxis1Park(Axis1Value);
+    SetAxis2Park(Axis2Value);
+    LOGF_INFO("Park position set to HA %.4f h, DEC %.4f deg", Axis1Value, Axis2Value);
     return true;
 }
 
+// -----------------------------------------------------------------------------
+// Save the CURRENT mount position as the park position.
+// Park data type is PARK_HA_DEC → Axis1 = Hour Angle, Axis2 = DEC.
 bool TitanTCS::SetCurrentPark()
 {
+    // Save the current mount position as the firmware's park point using ':hS#'
+    // (the same command the TitanTCS controller and ASCOM driver use — the
+    // controller beeps and shows "Park point saved"). The firmware stores the
+    // true mechanical position, which is then reached by ':hP1#' on park. This is
+    // far more reliable than storing sky coordinates, which are degenerate at the
+    // pole where this mount homes.
+    if(!SendCommand(":hS#"))
+    {
+        LOG_ERROR("SetCurrentPark: failed to send save-park command (:hS#)");
+        return false;
+    }
+    LOG_INFO("Saved current position as the mount's park point (:hS#).");
+
+    // Keep INDI's park-position fields in sync for display only (not used for the
+    // actual firmware park, which uses the mount's own stored point).
+    double lst = get_local_sidereal_time(LocationNP[LOCATION_LONGITUDE].getValue());
+    double ha  = get_local_hour_angle(lst, info.ra);
+    SetAxis1Park(ha);
+    SetAxis2Park(info.dec);
     return true;
 }
 // -----------------------------------------------------------------------------
+// Default park position: the celestial pole (this mount physically parks
+// pointing north). HA is arbitrary at the pole, so use 0.
 bool TitanTCS::SetDefaultPark()
 {
+    double poleDec = (LocationNP[LOCATION_LATITUDE].getValue() >= 0) ? 90.0 : -90.0;
+
+    SetAxis1Park(0.0);
+    SetAxis2Park(poleDec);
+
+    LOGF_INFO("Default park position set: HA 0.0 h, DEC %.1f deg (pole)", poleDec);
     return true;
 }
 

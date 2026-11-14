@@ -57,7 +57,7 @@ bool AstrometryDriver::initProperties()
     IUFillText(&SolverSettingsT[ASTROMETRY_SETTINGS_BINARY], "ASTROMETRY_SETTINGS_BINARY", "Solver",
                "/usr/bin/solve-field");
     IUFillText(&SolverSettingsT[ASTROMETRY_SETTINGS_OPTIONS], "ASTROMETRY_SETTINGS_OPTIONS", "Options",
-               "--no-verify --no-plots --no-fits2fits --resort --downsample 2 -O");
+               "--no-verify --no-plots --resort --downsample 2 -O");
     IUFillTextVector(&SolverSettingsTP, SolverSettingsT, 2, getDeviceName(), "ASTROMETRY_SETTINGS", "Settings",
                      MAIN_CONTROL_TAB, IP_WO, 0, IPS_IDLE);
 
@@ -106,7 +106,6 @@ void AstrometryDriver::ISGetProperties(const char *dev)
     DefaultDevice::ISGetProperties(dev);
 
     defineProperty(&ActiveDeviceTP);
-    loadConfig(true, "ACTIVE_DEVICES");
 }
 
 bool AstrometryDriver::updateProperties()
@@ -135,7 +134,7 @@ bool AstrometryDriver::updateProperties()
 
 const char *AstrometryDriver::getDefaultName()
 {
-    return (const char *)"Astrometry";
+    return "Astrometry";
 }
 
 bool AstrometryDriver::Connect()
@@ -196,7 +195,7 @@ bool AstrometryDriver::ISNewText(const char *dev, const char *name, char *texts[
             IDSetText(&ActiveDeviceTP, nullptr);
 
             // Update the property name!
-            strncpy(CCDDataBP.device, ActiveDeviceT[0].text, MAXINDIDEVICE);
+            snprintf(CCDDataBP.device, MAXINDIDEVICE, "%s", ActiveDeviceT[0].text);
             IDSnoopDevice(ActiveDeviceT[0].text, "CCD1");
             IDSnoopBLOBs(ActiveDeviceT[0].text, "CCD1", B_ONLY);
 
@@ -297,7 +296,7 @@ bool AstrometryDriver::processBLOB(uint8_t *data, uint32_t size, uint32_t len)
 
         if (destLen != size)
         {
-            LOGF_WARN("Discrepency between uncompressed data size %ld and expected size %ld",
+            LOGF_WARN("Discrepancy between uncompressed data size %ld and expected size %ld",
                       size, destLen);
         }
 

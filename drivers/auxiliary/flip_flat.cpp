@@ -42,7 +42,7 @@ static std::unique_ptr<FlipFlat> flipflat(new FlipFlat());
 #define FLAT_RES 8
 #define FLAT_TIMEOUT 3
 
-FlipFlat::FlipFlat() : LightBoxInterface(this, true)
+FlipFlat::FlipFlat() : LightBoxInterface(this), DustCapInterface(this)
 {
     setVersion(1, 1);
 }
@@ -61,12 +61,12 @@ bool FlipFlat::initProperties()
     IUFillText(&FirmwareT[0], "Version", "Version", nullptr);
     IUFillTextVector(&FirmwareTP, FirmwareT, 1, getDeviceName(), "Firmware", "Firmware", MAIN_CONTROL_TAB, IP_RO, 60, IPS_IDLE);
 
-    initDustCapProperties(getDeviceName(), MAIN_CONTROL_TAB);
-    initLightBoxProperties(getDeviceName(), MAIN_CONTROL_TAB);
+    DI::initProperties(MAIN_CONTROL_TAB);
+    LI::initProperties(MAIN_CONTROL_TAB, CAN_DIM);
 
-    LightIntensityN[0].min  = 0;
-    LightIntensityN[0].max  = 255;
-    LightIntensityN[0].step = 10;
+    LightIntensityNP[0].setMin(0);
+    LightIntensityNP[0].setMax(255);
+    LightIntensityNP[0].setStep(10);
 
     // Set DUSTCAP_INTEFACE later on connect after we verify whether it's flip-flat (dust cover + light) or just flip-man (light only)
     setDriverInterface(AUX_INTERFACE | LIGHTBOX_INTERFACE);
@@ -88,7 +88,7 @@ void FlipFlat::ISGetProperties(const char *dev)
     INDI::DefaultDevice::ISGetProperties(dev);
 
     // Get Light box properties
-    isGetLightBoxProperties(dev);
+    LI::ISGetProperties(dev);
 }
 
 bool FlipFlat::updateProperties()
@@ -98,26 +98,23 @@ bool FlipFlat::updateProperties()
     if (isConnected())
     {
         if (m_Type == FLIP_FLAT || m_Type == ALNITAK_DUST_COVER)
-            defineProperty(&ParkCapSP);
-        defineProperty(&LightSP);
-        defineProperty(&LightIntensityNP);
+            DI::updateProperties();
         defineProperty(&StatusTP);
         defineProperty(&FirmwareTP);
 
-        updateLightBoxProperties();
+        LI::updateProperties();
 
         getStartupData();
     }
     else
     {
         if (m_Type == FLIP_FLAT || m_Type == ALNITAK_DUST_COVER)
-            deleteProperty(ParkCapSP.name);
-        deleteProperty(LightSP.name);
-        deleteProperty(LightIntensityNP.name);
+            DI::updateProperties();
+
+        LI::updateProperties();
         deleteProperty(StatusTP.name);
         deleteProperty(FirmwareTP.name);
 
-        updateLightBoxProperties();
     }
 
     return true;
@@ -132,7 +129,7 @@ bool FlipFlat::Handshake()
 {
     if (isSimulation())
     {
-        LOGF_INFO("Connected successfuly to simulated %s. Retrieving startup data...", getDeviceName());
+        LOGF_INFO("Connected successfully to simulated %s. Retrieving startup data...", getDeviceName());
 
         SetTimer(getCurrentPollingPeriod());
 
@@ -150,6 +147,12 @@ bool FlipFlat::Handshake()
     i |= TIOCM_RTS;
     if (ioctl(PortFD, TIOCMBIC, &i) != 0)
     {
+        /* Try ping anyway, to allow flip-flat implementations using virtual serial ports to proceed */
+        if(ping())
+        {
+            LOG_DEBUG("Successfully connected to flip-flat without hardware IOCTL");
+            return true;
+        }
         LOGF_ERROR("IOCTL error %s.", strerror(errno));
         return false;
     }
@@ -172,7 +175,7 @@ bool FlipFlat::Handshake()
 
 bool FlipFlat::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
 {
-    if (processLightBoxNumber(dev, name, values, names, n))
+    if (LI::processNumber(dev, name, values, names, n))
         return true;
 
     return INDI::DefaultDevice::ISNewNumber(dev, name, values, names, n);
@@ -182,7 +185,7 @@ bool FlipFlat::ISNewText(const char *dev, const char *name, char *texts[], char 
 {
     if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
     {
-        if (processLightBoxText(dev, name, texts, names, n))
+        if (LI::processText(dev, name, texts, names, n))
             return true;
     }
 
@@ -193,10 +196,10 @@ bool FlipFlat::ISNewSwitch(const char *dev, const char *name, ISState *states, c
 {
     if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
     {
-        if (processDustCapSwitch(dev, name, states, names, n))
+        if (DI::processSwitch(dev, name, states, names, n))
             return true;
 
-        if (processLightBoxSwitch(dev, name, states, names, n))
+        if (LI::processSwitch(dev, name, states, names, n))
             return true;
     }
 
@@ -205,7 +208,7 @@ bool FlipFlat::ISNewSwitch(const char *dev, const char *name, ISState *states, c
 
 bool FlipFlat::ISSnoopDevice(XMLEle *root)
 {
-    snoopLightBox(root);
+    LI::snoop(root);
 
     return INDI::DefaultDevice::ISSnoopDevice(root);
 }
@@ -214,7 +217,7 @@ bool FlipFlat::saveConfigItems(FILE *fp)
 {
     INDI::DefaultDevice::saveConfigItems(fp);
 
-    return saveLightBoxConfigItems(fp);
+    return LI::saveConfigItems(fp);
 }
 
 bool FlipFlat::ping()
@@ -276,9 +279,9 @@ IPState FlipFlat::ParkCap()
         return IPS_ALERT;
 
     char expectedResponse[FLAT_RES];
-    snprintf(expectedResponse, FLAT_RES, "*C%02d000", productID);
+    snprintf(expectedResponse, FLAT_RES, "*C%02d", productID);
 
-    if (strcmp(response, expectedResponse) == 0)
+    if (strstr(response, expectedResponse))
     {
         // Set cover status to random value outside of range to force it to refresh
         prevCoverStatus = 10;
@@ -304,9 +307,9 @@ IPState FlipFlat::UnParkCap()
         return IPS_ALERT;
 
     char expectedResponse[FLAT_RES];
-    snprintf(expectedResponse, FLAT_RES, "*O%02d000", productID);
+    snprintf(expectedResponse, FLAT_RES, "*O%02d", productID);
 
-    if (strcmp(response, expectedResponse) == 0)
+    if (strstr(response, expectedResponse))
     {
         // Set cover status to random value outside of range to force it to refresh
         prevCoverStatus = 10;
@@ -325,7 +328,7 @@ bool FlipFlat::EnableLightBox(bool enable)
     char command[FLAT_CMD];
     char response[FLAT_RES];
 
-    if (m_Type == FLIP_FLAT && ParkCapS[1].s == ISS_ON)
+    if (m_Type == FLIP_FLAT && ParkCapSP[1].getState() == ISS_ON)
     {
         LOG_ERROR("Cannot control light while cap is unparked.");
         return false;
@@ -344,14 +347,13 @@ bool FlipFlat::EnableLightBox(bool enable)
 
     char expectedResponse[FLAT_RES];
     if (enable)
-        snprintf(expectedResponse, FLAT_RES, "*L%02d000", productID);
+        snprintf(expectedResponse, FLAT_RES, "*L%02d", productID);
     else
-        snprintf(expectedResponse, FLAT_RES, "*D%02d000", productID);
+        snprintf(expectedResponse, FLAT_RES, "*D%02d", productID);
 
-    if (strcmp(response, expectedResponse) == 0)
-        return true;
-
-    return false;
+    // JM 2022.11.06 find if the response contains expected response.
+    // We no longer check for zero-fillers since some implementations wrong interpreted as 0.
+    return (strstr(response, expectedResponse));
 }
 
 bool FlipFlat::getStatus()
@@ -360,14 +362,14 @@ bool FlipFlat::getStatus()
 
     if (isSimulation())
     {
-        if (ParkCapSP.s == IPS_BUSY && --simulationWorkCounter <= 0)
+        if (ParkCapSP.getState() == IPS_BUSY && --simulationWorkCounter <= 0)
         {
-            ParkCapSP.s = IPS_OK;
-            IDSetSwitch(&ParkCapSP, nullptr);
+            ParkCapSP.setState(IPS_OK);
+            ParkCapSP.apply();
             simulationWorkCounter = 0;
         }
 
-        if (ParkCapSP.s == IPS_BUSY)
+        if (ParkCapSP.getState() == IPS_BUSY)
         {
             response[4] = '1';
             response[6] = '0';
@@ -376,13 +378,13 @@ bool FlipFlat::getStatus()
         {
             response[4] = '0';
             // Parked/Closed
-            if (ParkCapS[CAP_PARK].s == ISS_ON)
+            if (ParkCapSP[CAP_PARK].getState() == ISS_ON)
                 response[6] = '1';
             else
                 response[6] = '2';
         }
 
-        response[5] = (LightS[FLAT_LIGHT_ON].s == ISS_ON) ? '1' : '0';
+        response[5] = (LightSP[FLAT_LIGHT_ON].getState() == ISS_ON) ? '1' : '0';
     }
     else
     {
@@ -410,25 +412,25 @@ bool FlipFlat::getStatus()
 
             case 1:
                 IUSaveText(&StatusT[0], "Closed");
-                if (ParkCapSP.s == IPS_BUSY || ParkCapSP.s == IPS_IDLE)
+                if (ParkCapSP.getState() == IPS_BUSY || ParkCapSP.getState() == IPS_IDLE)
                 {
-                    IUResetSwitch(&ParkCapSP);
-                    ParkCapS[0].s = ISS_ON;
-                    ParkCapSP.s   = IPS_OK;
+                    ParkCapSP.reset();
+                    ParkCapSP[0].setState(ISS_ON);
+                    ParkCapSP.setState(IPS_OK);
                     LOG_INFO("Cover closed.");
-                    IDSetSwitch(&ParkCapSP, nullptr);
+                    ParkCapSP.apply();
                 }
                 break;
 
             case 2:
                 IUSaveText(&StatusT[0], "Open");
-                if (ParkCapSP.s == IPS_BUSY || ParkCapSP.s == IPS_IDLE)
+                if (ParkCapSP.getState() == IPS_BUSY || ParkCapSP.getState() == IPS_IDLE)
                 {
-                    IUResetSwitch(&ParkCapSP);
-                    ParkCapS[1].s = ISS_ON;
-                    ParkCapSP.s   = IPS_OK;
+                    ParkCapSP.reset();
+                    ParkCapSP[1].setState(ISS_ON);
+                    ParkCapSP.setState(IPS_OK);
                     LOG_INFO("Cover open.");
-                    IDSetSwitch(&ParkCapSP, nullptr);
+                    ParkCapSP.apply();
                 }
                 break;
 
@@ -448,21 +450,21 @@ bool FlipFlat::getStatus()
         {
             case 0:
                 IUSaveText(&StatusT[1], "Off");
-                if (LightS[0].s == ISS_ON)
+                if (LightSP[0].getState() == ISS_ON)
                 {
-                    LightS[0].s = ISS_OFF;
-                    LightS[1].s = ISS_ON;
-                    IDSetSwitch(&LightSP, nullptr);
+                    LightSP[0].setState(ISS_OFF);
+                    LightSP[1].setState(ISS_ON);
+                    LightSP.apply();
                 }
                 break;
 
             case 1:
                 IUSaveText(&StatusT[1], "On");
-                if (LightS[1].s == ISS_ON)
+                if (LightSP[1].getState() == ISS_ON)
                 {
-                    LightS[0].s = ISS_ON;
-                    LightS[1].s = ISS_OFF;
-                    IDSetSwitch(&LightSP, nullptr);
+                    LightSP[0].setState(ISS_ON);
+                    LightSP[1].setState(ISS_OFF);
+                    LightSP.apply();
                 }
                 break;
         }
@@ -521,9 +523,9 @@ void FlipFlat::TimerHit()
     getStatus();
 
     // parking or unparking timed out, try again
-    if (ParkCapSP.s == IPS_BUSY && !strcmp(StatusT[0].text, "Timed out"))
+    if (ParkCapSP.getState() == IPS_BUSY && !strcmp(StatusT[0].text, "Timed out"))
     {
-        if (ParkCapS[0].s == ISS_ON)
+        if (ParkCapSP[0].getState() == ISS_ON)
             ParkCap();
         else
             UnParkCap();
@@ -557,9 +559,9 @@ bool FlipFlat::getBrightness()
 
     if (brightnessValue != prevBrightness)
     {
-        prevBrightness           = brightnessValue;
-        LightIntensityN[0].value = brightnessValue;
-        IDSetNumber(&LightIntensityNP, nullptr);
+        prevBrightness = brightnessValue;
+        LightIntensityNP[0].setValue(brightnessValue);
+        LightIntensityNP.apply();
     }
 
     return true;
@@ -569,8 +571,8 @@ bool FlipFlat::SetLightBoxBrightness(uint16_t value)
 {
     if (isSimulation())
     {
-        LightIntensityN[0].value = value;
-        IDSetNumber(&LightIntensityNP, nullptr);
+        LightIntensityNP[0].setValue(value);
+        LightIntensityNP.apply();
         return true;
     }
 
@@ -586,7 +588,7 @@ bool FlipFlat::SetLightBoxBrightness(uint16_t value)
     snprintf(brightnessString, 4, "%s", response + 4);
 
     int brightnessValue = 0;
-    int rc              = sscanf(brightnessString, "%d", &brightnessValue);
+    int rc = sscanf(brightnessString, "%d", &brightnessValue);
 
     if (rc <= 0)
     {
@@ -596,9 +598,9 @@ bool FlipFlat::SetLightBoxBrightness(uint16_t value)
 
     if (brightnessValue != prevBrightness)
     {
-        prevBrightness           = brightnessValue;
-        LightIntensityN[0].value = brightnessValue;
-        IDSetNumber(&LightIntensityNP, nullptr);
+        prevBrightness = brightnessValue;
+        LightIntensityNP[0].setValue(brightnessValue);
+        LightIntensityNP.apply();
     }
 
     return true;
@@ -656,7 +658,7 @@ void FlipFlat::unparkTimeoutHelper(void *context)
 
 void FlipFlat::parkTimeout()
 {
-    if (ParkCapSP.s == IPS_BUSY)
+    if (ParkCapSP.getState() == IPS_BUSY)
     {
         LOG_WARN("Parking cap timed out. Retrying...");
         ParkCap();
@@ -665,7 +667,7 @@ void FlipFlat::parkTimeout()
 
 void FlipFlat::unparkTimeout()
 {
-    if (ParkCapSP.s == IPS_BUSY)
+    if (ParkCapSP.getState() == IPS_BUSY)
     {
         LOG_WARN("UnParking cap timed out. Retrying...");
         UnParkCap();

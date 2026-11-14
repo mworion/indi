@@ -19,6 +19,7 @@
 #pragma once
 
 #include "indifocuser.h"
+#include "indipropertynumber.h"
 
 /**
  * @brief The FocusSim class provides a simple Focuser simulator that can simulator the following devices:
@@ -55,25 +56,27 @@ class FocusSim : public INDI::Focuser
         virtual IPState MoveAbsFocuser(uint32_t targetTicks) override;
         virtual IPState MoveRelFocuser(FocusDirection dir, uint32_t ticks) override;
         virtual bool SetFocuserSpeed(int speed) override;
+        virtual bool SyncFocuser(uint32_t ticks) override;
 
         virtual bool SetFocuserBacklash(int32_t steps) override;
         virtual bool SetFocuserBacklashEnabled(bool enabled) override;
+
+        virtual bool saveConfigItems(FILE *fp) override;
 
     private:
         double internalTicks { 0 };
         double initTicks { 0 };
 
         // Seeing in arcseconds
-        INumberVectorProperty SeeingNP;
-        INumber SeeingN[1];
+        INDI::PropertyNumber SeeingNP {1};
 
         // FWHM to be used by CCD driver to draw 'fuzzy' stars
-        INumberVectorProperty FWHMNP;
-        INumber FWHMN[1];
+        INDI::PropertyNumber FWHMNP {1};
 
         // Temperature in celcius degrees
-        INumberVectorProperty TemperatureNP;
-        INumber TemperatureN[1];
+        INDI::PropertyNumber TemperatureNP {1};
+
+        INDI::PropertyNumber DelayNP {1};
 
         // Current mode of Focus simulator for testing purposes
         enum
@@ -84,6 +87,6 @@ class FocusSim : public INDI::Focuser
             MODE_TIMER,
             MODE_COUNT
         };
-        ISwitchVectorProperty ModeSP;
-        ISwitch ModeS[MODE_COUNT];
+        INDI::PropertySwitch ModeSP {4};
+        //        ISwitch ModeS[MODE_COUNT];
 };

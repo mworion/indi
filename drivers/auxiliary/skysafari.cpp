@@ -37,11 +37,20 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 
-#ifdef __FreeBSD__
-#include <netinet/in.h>
+#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <net/if_dl.h>
 #endif
+
+namespace
+{
+constexpr unsigned short SKYFI_DISCOVERY_PORT = 4031;
+constexpr unsigned short SKYSAFARI_DEFAULT_PORT = 9624;
+}
 
 // We declare unique pointer to my lovely German Shephard Tommy (http://indilib.org/images/juli_tommy.jpg)
 // Rest in Peace Tommy 2013-2018
@@ -95,6 +104,11 @@ bool SkySafari::initProperties()
                        IP_RW,
                        ISR_1OFMANY, 0, IPS_IDLE);
 
+    IUFillSwitch(&SkyFiDiscoveryS[SKYFI_DISCOVERY_ENABLE], "SKYFI_DISCOVERY_ENABLE", "Discoverable as SkyFi", ISS_OFF);
+    IUFillSwitch(&SkyFiDiscoveryS[SKYFI_DISCOVERY_DISABLE], "SKYFI_DISCOVERY_DISABLE", "Disabled", ISS_ON);
+    IUFillSwitchVector(&SkyFiDiscoverySP, SkyFiDiscoveryS, 2, getDeviceName(), "SKYFI_DISCOVERY", "SkyFi Discovery",
+                       OPTIONS_TAB, IP_RW, ISR_1OFMANY, 0, IPS_IDLE);
+
     IUFillText(&ActiveDeviceT[ACTIVE_TELESCOPE], "ACTIVE_TELESCOPE", "Telescope", "Telescope Simulator");
     IUFillTextVector(&ActiveDeviceTP, ActiveDeviceT, 1, getDeviceName(), "ACTIVE_DEVICES", "Active devices",
                      OPTIONS_TAB, IP_RW, 60, IPS_IDLE);
@@ -113,6 +127,7 @@ void SkySafari::ISGetProperties(const char *dev)
 
     defineProperty(&SettingsTP);
     defineProperty(&ActiveDeviceTP);
+    defineProperty(&SkyFiDiscoverySP);
 
     loadConfig(true);
 }
@@ -145,6 +160,20 @@ bool SkySafari::ISNewSwitch(const char *dev, const char *name, ISState *states, 
 {
     if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
     {
+        if (!strcmp(SkyFiDiscoverySP.name, name))
+        {
+            IUUpdateSwitch(&SkyFiDiscoverySP, states, names, n);
+            SkyFiDiscoverySP.s = IPS_OK;
+
+            if (SkyFiDiscoveryS[SKYFI_DISCOVERY_ENABLE].s == ISS_ON)
+                startDiscovery();
+            else
+                stopDiscovery();
+
+            IDSetSwitch(&SkyFiDiscoverySP, nullptr);
+            return true;
+        }
+
         if (!strcmp(ServerControlSP.name, name))
         {
             bool rc = false;
@@ -192,6 +221,7 @@ bool SkySafari::saveConfigItems(FILE *fp)
 {
     IUSaveConfigText(fp, &SettingsTP);
     IUSaveConfigText(fp, &ActiveDeviceTP);
+    IUSaveConfigSwitch(fp, &SkyFiDiscoverySP);
 
     return true;
 }
@@ -200,6 +230,8 @@ void SkySafari::TimerHit()
 {
     if (!isConnected())
         return;
+
+    handleDiscovery();
 
     if (clientFD == -1)
     {
@@ -280,6 +312,7 @@ bool SkySafari::startServer()
     int sfd;
     int flags = 0;
     int reuse = 1;
+    const unsigned short requestedPort = static_cast<unsigned short>(atoi(SettingsT[SKYSAFARI_PORT].text));
 
     /* make socket endpoint */
     if ((sfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
@@ -304,7 +337,7 @@ bool SkySafari::startServer()
     memset(&serv_socket, 0, sizeof(serv_socket));
     serv_socket.sin_family      = AF_INET;
     serv_socket.sin_addr.s_addr = htonl(INADDR_ANY);
-    serv_socket.sin_port        = htons((unsigned short)atoi(SettingsT[SKYSAFARI_PORT].text));
+    serv_socket.sin_port        = htons(requestedPort);
     if (setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
     {
         LOGF_ERROR("Error starting server. setsockopt: %s", strerror(errno));
@@ -325,6 +358,10 @@ bool SkySafari::startServer()
     }
 
     lsocket = sfd;
+    serverPort = requestedPort;
+    if (SkyFiDiscoveryS[SKYFI_DISCOVERY_ENABLE].s == ISS_ON)
+        startDiscovery();
+
     LOG_INFO(
         "SkySafari Server is running. Connect the App now to this machine using SkySafari LX200 driver.");
     return true;
@@ -332,14 +369,229 @@ bool SkySafari::startServer()
 
 bool SkySafari::stopServer()
 {
-    if (clientFD > 0)
+    stopDiscovery();
+
+    if (clientFD >= 0)
         close(clientFD);
-    if (lsocket > 0)
+    if (lsocket >= 0)
         close(lsocket);
 
     clientFD = lsocket = -1;
+    serverPort = 0;
 
     return true;
+}
+
+bool SkySafari::startDiscovery()
+{
+    if (discoverySocket >= 0)
+        return true;
+
+    if (lsocket < 0)
+        return false;
+
+    if (serverPort != SKYSAFARI_DEFAULT_PORT)
+    {
+        LOGF_WARN("SkyFi discovery requires SkySafari TCP port %hu; discovery is disabled for port %hu.",
+                  SKYSAFARI_DEFAULT_PORT, serverPort);
+        return false;
+    }
+
+#if !defined(IP_PKTINFO) && !defined(IP_RECVDSTADDR)
+    LOG_WARN("SkyFi discovery is unavailable because this platform cannot identify the receiving interface.");
+    return false;
+#endif
+
+    int sfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sfd < 0)
+    {
+        LOGF_WARN("Unable to create SkyFi discovery socket: %s", strerror(errno));
+        return false;
+    }
+
+    int flags = fcntl(sfd, F_GETFL, 0);
+    if (flags < 0 || fcntl(sfd, F_SETFL, flags | O_NONBLOCK) < 0)
+    {
+        LOGF_WARN("Unable to make SkyFi discovery socket non-blocking: %s", strerror(errno));
+        close(sfd);
+        return false;
+    }
+
+    int receivePacketInfo = 1;
+#if defined(IP_PKTINFO)
+    if (setsockopt(sfd, IPPROTO_IP, IP_PKTINFO, &receivePacketInfo, sizeof(receivePacketInfo)) < 0)
+    {
+        LOGF_WARN("Unable to obtain SkyFi discovery interface information: %s", strerror(errno));
+        close(sfd);
+        return false;
+    }
+#elif defined(IP_RECVDSTADDR)
+    if (setsockopt(sfd, IPPROTO_IP, IP_RECVDSTADDR, &receivePacketInfo, sizeof(receivePacketInfo)) < 0)
+    {
+        LOGF_WARN("Unable to obtain SkyFi discovery destination information: %s", strerror(errno));
+        close(sfd);
+        return false;
+    }
+#ifdef IP_RECVIF
+    if (setsockopt(sfd, IPPROTO_IP, IP_RECVIF, &receivePacketInfo, sizeof(receivePacketInfo)) < 0)
+    {
+        LOGF_WARN("Unable to obtain SkyFi discovery interface information: %s", strerror(errno));
+        close(sfd);
+        return false;
+    }
+#endif
+#endif
+
+    struct sockaddr_in discoveryAddress {};
+    discoveryAddress.sin_family      = AF_INET;
+    discoveryAddress.sin_addr.s_addr = htonl(INADDR_ANY);
+    discoveryAddress.sin_port        = htons(SKYFI_DISCOVERY_PORT);
+    if (::bind(sfd, reinterpret_cast<struct sockaddr *>(&discoveryAddress), sizeof(discoveryAddress)) < 0)
+    {
+        LOGF_WARN("Unable to bind SkyFi discovery port %hu: %s", SKYFI_DISCOVERY_PORT, strerror(errno));
+        close(sfd);
+        return false;
+    }
+
+    discoverySocket = sfd;
+    LOGF_INFO("SkyFi discovery is listening on UDP port %hu.", SKYFI_DISCOVERY_PORT);
+    return true;
+}
+
+void SkySafari::stopDiscovery()
+{
+    if (discoverySocket >= 0)
+    {
+        close(discoverySocket);
+        discoverySocket = -1;
+    }
+}
+
+void SkySafari::handleDiscovery()
+{
+    if (discoverySocket < 0)
+        return;
+
+    for (int i = 0; i < 16; ++i)
+    {
+        char query[256];
+        alignas(struct cmsghdr) char control[512] {};
+        struct sockaddr_in clientAddress {};
+        struct iovec data {};
+        data.iov_base = query;
+        data.iov_len  = sizeof(query);
+
+        struct msghdr message {};
+        message.msg_name       = &clientAddress;
+        message.msg_namelen    = sizeof(clientAddress);
+        message.msg_iov        = &data;
+        message.msg_iovlen     = 1;
+        message.msg_control    = control;
+        message.msg_controllen = sizeof(control);
+
+        ssize_t queryLength = recvmsg(discoverySocket, &message, 0);
+        if (queryLength < 0)
+        {
+            if (errno != EAGAIN && errno != EWOULDBLOCK)
+                LOGF_WARN("Error receiving SkyFi discovery request: %s", strerror(errno));
+            return;
+        }
+
+        if (queryLength == 0 || (message.msg_flags & (MSG_TRUNC | MSG_CTRUNC)))
+            continue;
+
+        if (query[queryLength - 1] != '?')
+        {
+            LOG_DEBUG("Ignoring invalid SkyFi discovery request without a trailing question mark.");
+            continue;
+        }
+
+        struct in_addr localAddress {};
+        bool haveLocalAddress = false;
+#if defined(IP_PKTINFO)
+        for (struct cmsghdr *cmsg = CMSG_FIRSTHDR(&message); cmsg != nullptr; cmsg = CMSG_NXTHDR(&message, cmsg))
+        {
+            if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_PKTINFO
+                    && cmsg->cmsg_len >= CMSG_LEN(sizeof(struct in_pktinfo)))
+            {
+                const auto *packetInfo = reinterpret_cast<const struct in_pktinfo *>(CMSG_DATA(cmsg));
+                localAddress = packetInfo->ipi_spec_dst;
+                haveLocalAddress = true;
+                break;
+            }
+        }
+#elif defined(IP_RECVDSTADDR)
+        unsigned int interfaceIndex = 0;
+        for (struct cmsghdr *cmsg = CMSG_FIRSTHDR(&message); cmsg != nullptr; cmsg = CMSG_NXTHDR(&message, cmsg))
+        {
+#ifdef IP_RECVIF
+            if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_RECVIF
+                    && cmsg->cmsg_len >= CMSG_LEN(sizeof(struct sockaddr_dl)))
+            {
+                const auto *interfaceAddress = reinterpret_cast<const struct sockaddr_dl *>(CMSG_DATA(cmsg));
+                interfaceIndex = interfaceAddress->sdl_index;
+            }
+#endif
+            if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_RECVDSTADDR
+                    && cmsg->cmsg_len >= CMSG_LEN(sizeof(struct in_addr)))
+            {
+                const auto *destination = reinterpret_cast<const struct in_addr *>(CMSG_DATA(cmsg));
+                localAddress = *destination;
+                haveLocalAddress = true;
+            }
+        }
+
+#if defined(IP_RECVIF) && (defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__APPLE__))
+        if (interfaceIndex != 0)
+        {
+            // IP_RECVDSTADDR returns the broadcast destination, not the interface's unicast address.
+            struct ifaddrs *interfaces = nullptr;
+            if (getifaddrs(&interfaces) < 0)
+            {
+                LOGF_WARN("Unable to look up SkyFi discovery interface address: %s", strerror(errno));
+                continue;
+            }
+
+            haveLocalAddress = false;
+            for (struct ifaddrs *interface = interfaces; interface != nullptr; interface = interface->ifa_next)
+            {
+                if (interface->ifa_addr != nullptr && interface->ifa_addr->sa_family == AF_INET
+                        && if_nametoindex(interface->ifa_name) == interfaceIndex)
+                {
+                    const auto *interfaceAddress = reinterpret_cast<const struct sockaddr_in *>(interface->ifa_addr);
+                    localAddress = interfaceAddress->sin_addr;
+                    haveLocalAddress = true;
+                    break;
+                }
+            }
+            freeifaddrs(interfaces);
+        }
+#endif
+#endif
+
+        if (!haveLocalAddress)
+        {
+            LOG_WARN("Unable to determine local address for SkyFi discovery request.");
+            continue;
+        }
+
+        char localAddressText[INET_ADDRSTRLEN];
+        if (inet_ntop(AF_INET, &localAddress, localAddressText, sizeof(localAddressText)) == nullptr)
+        {
+            LOGF_WARN("Unable to format SkyFi discovery interface address: %s", strerror(errno));
+            continue;
+        }
+
+        std::string response(query, static_cast<size_t>(queryLength - 1));
+        response += '@';
+        response += localAddressText;
+        ssize_t sent = sendto(discoverySocket, response.data(), response.size(), 0,
+                              reinterpret_cast<struct sockaddr *>(&clientAddress), message.msg_namelen);
+        if (sent < 0)
+            LOGF_WARN("Error replying to SkyFi discovery request: %s", strerror(errno));
+        else if (static_cast<size_t>(sent) != response.size())
+            LOG_WARN("Incomplete reply to SkyFi discovery request.");
+    }
 }
 
 void SkySafari::processCommand(std::string cmd)
@@ -449,7 +701,7 @@ void SkySafari::processCommand(std::string cmd)
     // Get RA
     else if (cmd == "GR")
     {
-        INumberVectorProperty *eqCoordsNP = skySafariClient->getEquatorialCoords();
+        auto eqCoordsNP = skySafariClient->getEquatorialCoords();
         if (eqCoordsNP == nullptr)
         {
             LOG_WARN("Unable to communicate with mount, is mount turned on and connected?");
@@ -458,14 +710,14 @@ void SkySafari::processCommand(std::string cmd)
 
         int hh, mm, ss;
         char output[32] = { 0 };
-        getSexComponents(eqCoordsNP->np[AXIS_RA].value, &hh, &mm, &ss);
+        getSexComponents(eqCoordsNP->at(AXIS_RA)->getValue(), &hh, &mm, &ss);
         snprintf(output, 32, "%02d:%02d:%02d#", hh, mm, ss);
         sendSkySafari(output);
     }
     // Get DE
     else if (cmd == "GD")
     {
-        INumberVectorProperty *eqCoordsNP = skySafariClient->getEquatorialCoords();
+        auto eqCoordsNP = skySafariClient->getEquatorialCoords();
         if (eqCoordsNP == nullptr)
         {
             LOG_WARN("Unable to communicate with mount, is mount turned on and connected?");
@@ -473,8 +725,8 @@ void SkySafari::processCommand(std::string cmd)
         }
         int dd, mm, ss;
         char output[32] = { 0 };
-        getSexComponents(eqCoordsNP->np[AXIS_DE].value, &dd, &mm, &ss);
-        snprintf(output, 32, "%c%02d:%02d:%02d#", (eqCoordsNP->np[AXIS_DE].value >= 0) ? '+' : '-',
+        getSexComponents(eqCoordsNP->at(AXIS_DE)->getValue(), &dd, &mm, &ss);
+        snprintf(output, 32, "%c%02d:%02d:%02d#", (eqCoordsNP->at(AXIS_DE)->getValue() >= 0) ? '+' : '-',
                  std::abs(dd), mm, ss);
         sendSkySafari(output);
     }
@@ -495,7 +747,7 @@ void SkySafari::processCommand(std::string cmd)
     // GOTO
     else if (cmd == "MS")
     {
-        ISwitchVectorProperty *gotoModeSP = skySafariClient->getGotoMode();
+        auto gotoModeSP = skySafariClient->getGotoMode();
         if (gotoModeSP == nullptr)
         {
             sendSkySafari("2<Not Supported>#");
@@ -503,20 +755,20 @@ void SkySafari::processCommand(std::string cmd)
         }
 
         // Set mode first
-        ISwitch *trackSW = IUFindSwitch(gotoModeSP, "TRACK");
+        auto trackSW = gotoModeSP->findWidgetByName("TRACK");
         if (trackSW == nullptr)
         {
             sendSkySafari("2<Not Supported>#");
             return;
         }
 
-        IUResetSwitch(gotoModeSP);
-        trackSW->s = ISS_ON;
+        gotoModeSP->reset();
+        trackSW->setState(ISS_ON);
         skySafariClient->sendGotoMode();
 
-        INumberVectorProperty *eqCoordsNP = skySafariClient->getEquatorialCoords();
-        eqCoordsNP->np[AXIS_RA].value     = RA;
-        eqCoordsNP->np[AXIS_DE].value     = DE;
+        auto eqCoordsNP = skySafariClient->getEquatorialCoords();
+        eqCoordsNP->at(AXIS_RA)->setValue(RA);
+        eqCoordsNP->at(AXIS_DE)->setValue(DE);
         skySafariClient->sendEquatorialCoords();
 
         sendSkySafari("0");
@@ -524,7 +776,7 @@ void SkySafari::processCommand(std::string cmd)
     // Sync
     else if (cmd == "CM")
     {
-        ISwitchVectorProperty *gotoModeSP = skySafariClient->getGotoMode();
+        auto gotoModeSP = skySafariClient->getGotoMode();
         if (gotoModeSP == nullptr)
         {
             sendSkySafari("Not Supported#");
@@ -532,20 +784,20 @@ void SkySafari::processCommand(std::string cmd)
         }
 
         // Set mode first
-        ISwitch *syncSW = IUFindSwitch(gotoModeSP, "SYNC");
+        auto syncSW = gotoModeSP->findWidgetByName("SYNC");
         if (syncSW == nullptr)
         {
             sendSkySafari("Not Supported#");
             return;
         }
 
-        IUResetSwitch(gotoModeSP);
-        syncSW->s = ISS_ON;
+        gotoModeSP->reset();
+        syncSW->setState(ISS_ON);
         skySafariClient->sendGotoMode();
 
-        INumberVectorProperty *eqCoordsNP = skySafariClient->getEquatorialCoords();
-        eqCoordsNP->np[AXIS_RA].value     = RA;
-        eqCoordsNP->np[AXIS_DE].value     = DE;
+        auto eqCoordsNP = skySafariClient->getEquatorialCoords();
+        eqCoordsNP->at(AXIS_RA)->setValue(RA);
+        eqCoordsNP->at(AXIS_DE)->setValue(DE);
         skySafariClient->sendEquatorialCoords();
 
         sendSkySafari(" M31 EX GAL MAG 3.5 SZ178.0'#");
@@ -578,84 +830,84 @@ void SkySafari::processCommand(std::string cmd)
     // Mn
     else if (cmd == "Mn")
     {
-        ISwitchVectorProperty *motionNSNP = skySafariClient->getMotionNS();
+        auto motionNSNP = skySafariClient->getMotionNS();
         if (motionNSNP)
         {
-            IUResetSwitch(motionNSNP);
-            motionNSNP->sp[0].s = ISS_ON;
+            motionNSNP->reset();
+            motionNSNP->at(0)->setState(ISS_ON);
             skySafariClient->setMotionNS();
         }
     }
     // Qn
     else if (cmd == "Qn")
     {
-        ISwitchVectorProperty *motionNSNP = skySafariClient->getMotionNS();
+        auto motionNSNP = skySafariClient->getMotionNS();
         if (motionNSNP)
         {
-            IUResetSwitch(motionNSNP);
+            motionNSNP->reset();
             skySafariClient->setMotionNS();
         }
     }
     // Ms
     else if (cmd == "Ms")
     {
-        ISwitchVectorProperty *motionNSNP = skySafariClient->getMotionNS();
+        auto motionNSNP = skySafariClient->getMotionNS();
         if (motionNSNP)
         {
-            IUResetSwitch(motionNSNP);
-            motionNSNP->sp[1].s = ISS_ON;
+            motionNSNP->reset();
+            motionNSNP->at(1)->setState(ISS_ON);
             skySafariClient->setMotionNS();
         }
     }
     // Qs
     else if (cmd == "Qs")
     {
-        ISwitchVectorProperty *motionNSNP = skySafariClient->getMotionNS();
+        auto motionNSNP = skySafariClient->getMotionNS();
         if (motionNSNP)
         {
-            IUResetSwitch(motionNSNP);
+            motionNSNP->reset();
             skySafariClient->setMotionNS();
         }
     }
     // Mw
     else if (cmd == "Mw")
     {
-        ISwitchVectorProperty *motionWENP = skySafariClient->getMotionWE();
+        auto motionWENP = skySafariClient->getMotionWE();
         if (motionWENP)
         {
-            IUResetSwitch(motionWENP);
-            motionWENP->sp[0].s = ISS_ON;
+            motionWENP->reset();
+            motionWENP->at(0)->setState(ISS_ON);
             skySafariClient->setMotionWE();
         }
     }
     // Qw
     else if (cmd == "Qw")
     {
-        ISwitchVectorProperty *motionWENP = skySafariClient->getMotionWE();
+        auto motionWENP = skySafariClient->getMotionWE();
         if (motionWENP)
         {
-            IUResetSwitch(motionWENP);
+            motionWENP->reset();
             skySafariClient->setMotionWE();
         }
     }
     // Me
     else if (cmd == "Me")
     {
-        ISwitchVectorProperty *motionWENP = skySafariClient->getMotionWE();
+        auto motionWENP = skySafariClient->getMotionWE();
         if (motionWENP)
         {
-            IUResetSwitch(motionWENP);
-            motionWENP->sp[1].s = ISS_ON;
+            motionWENP->reset();
+            motionWENP->at(1)->setState(ISS_ON);
             skySafariClient->setMotionWE();
         }
     }
     // Qe
     else if (cmd == "Qe")
     {
-        ISwitchVectorProperty *motionWENP = skySafariClient->getMotionWE();
+        auto motionWENP = skySafariClient->getMotionWE();
         if (motionWENP)
         {
-            IUResetSwitch(motionWENP);
+            motionWENP->reset();
             skySafariClient->setMotionWE();
         }
     }
@@ -663,15 +915,15 @@ void SkySafari::processCommand(std::string cmd)
 
 void SkySafari::sendGeographicCoords()
 {
-    INumberVectorProperty *geographicCoords = skySafariClient->getGeographiCoords();
+    auto geographicCoords = skySafariClient->getGeographiCoords();
     if (geographicCoords && haveLatitude && haveLongitude)
     {
-        INumber *latitude  = IUFindNumber(geographicCoords, "LAT");
-        INumber *longitude = IUFindNumber(geographicCoords, "LONG");
+        auto latitude  = geographicCoords->findWidgetByName("LAT");
+        auto longitude = geographicCoords->findWidgetByName("LONG");
         if (latitude && longitude)
         {
-            latitude->value  = siteLatitude;
-            longitude->value = siteLongitude;
+            latitude->setValue(siteLatitude);
+            longitude->setValue(siteLongitude);
             skySafariClient->sendGeographicCoords();
 
             // Reset
@@ -703,7 +955,7 @@ bool SkySafari::sendSkySafari(const char *message)
 
 void SkySafari::sendUTCtimedate()
 {
-    ITextVectorProperty *timeUTC = skySafariClient->getTimeUTC();
+    auto timeUTC = skySafariClient->getTimeUTC();
     if (timeUTC && haveUTCoffset && haveUTCtime && haveUTCdate)
     {
         int yyyy = timeYear;
@@ -730,8 +982,8 @@ void SkySafari::sendUTCtimedate()
                  utcdate.minutes, (int)(utcdate.seconds));
         snprintf(bufOff, 8, "%4.2f", timeUTCOffset);
 
-        IUSaveText(IUFindText(timeUTC, "UTC"), bufDT);
-        IUSaveText(IUFindText(timeUTC, "OFFSET"), bufOff);
+        timeUTC->findWidgetByName("UTC")->setText(bufDT);
+        timeUTC->findWidgetByName("OFFSET")->setText(bufOff);
 
         LOGF_DEBUG("send to timedate. %s, %s", bufDT, bufOff);
 

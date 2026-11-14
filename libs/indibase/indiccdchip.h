@@ -19,6 +19,11 @@
 #pragma once
 
 #include "indiapi.h"
+#include "indidriver.h"
+#include "indipropertyswitch.h"
+#include "indipropertyblob.h"
+
+#include "indipropertynumber.h"
 
 #include <sys/time.h>
 #include <stdint.h>
@@ -57,11 +62,17 @@ class CCDChip
          */
         bool openFITSFile(uint32_t size, int &status);
 
+
         /**
-         * @brief closeFITSFile Close the in-memory FITS File.
+         * @brief Finish any pending write to fits file.
          * @return True if successful, false otherwise.
          */
-        bool closeFITSFile();
+        bool finishFITSFile(int &status);
+
+        /**
+         * @brief closeFITSFile Close the in-memory FITS File.
+         */
+        void closeFITSFile();
 
         /**
          * @brief getXRes Get the horizontal resolution in pixels of the CCD Chip.
@@ -177,7 +188,7 @@ class CCDChip
          */
         inline double getExposureLeft() const
         {
-            return ImageExposureN[0].value;
+            return ImageExposureNP[0].getValue();
         }
 
         /**
@@ -254,9 +265,9 @@ class CCDChip
         /**
          * @brief Return CCD Info Property
          */
-        INumberVectorProperty *getCCDInfo()
+        INDI::PropertyNumber getCCDInfo()
         {
-            return &ImagePixelSizeNP;
+            return ImagePixelSizeNP;
         }
 
         /**
@@ -297,7 +308,7 @@ class CCDChip
 
         /**
          * @brief setPixelSize Set CCD Chip pixel size
-         * @param x Horziontal pixel size in microns.
+         * @param x Horizontal pixel size in microns.
          * @param y Vertical pixel size in microns.
          */
         void setPixelSize(double x, double y);
@@ -373,7 +384,7 @@ class CCDChip
         void setNAxis(int value);
 
         /**
-         * @brief setImageExtension Set image exntension
+         * @brief setImageExtension Set image extension
          * @param ext extension (fits, jpeg, raw..etc)
          */
         void setImageExtension(const char *ext);
@@ -391,7 +402,7 @@ class CCDChip
          */
         bool isExposing() const
         {
-            return (ImageExposureNP.s == IPS_BUSY);
+            return (ImageExposureNP.getState() == IPS_BUSY);
         }
 
         /**
@@ -478,56 +489,50 @@ class CCDChip
         /////////////////////////////////////////////////////////////////////////////////////////
         /// Image Exposure Duration
         /////////////////////////////////////////////////////////////////////////////////////////
-        INumberVectorProperty ImageExposureNP;
-        INumber ImageExposureN[1];
+        INDI::PropertyNumber ImageExposureNP {1};
 
         /////////////////////////////////////////////////////////////////////////////////////////
         /// Abort Exposure
         /////////////////////////////////////////////////////////////////////////////////////////
-        ISwitchVectorProperty AbortExposureSP;
-        ISwitch AbortExposureS[1];
+        INDI::PropertySwitch AbortExposureSP {1};
 
         /////////////////////////////////////////////////////////////////////////////////////////
         /// Image Frame ROI
         /////////////////////////////////////////////////////////////////////////////////////////
-        INumberVectorProperty ImageFrameNP;
-        INumber ImageFrameN[4];
+        INDI::PropertyNumber ImageFrameNP {4};
 
         /////////////////////////////////////////////////////////////////////////////////////////
         /// Image Binning
         /////////////////////////////////////////////////////////////////////////////////////////
-        INumberVectorProperty ImageBinNP;
-        INumber ImageBinN[2];
-
+        INDI::PropertyNumber ImageBinNP{2};
+        enum
+        {
+            HOR_BIN,
+            VER_BIN
+        };
         /////////////////////////////////////////////////////////////////////////////////////////
         /// Image Resolution & Pixel Size data
         /////////////////////////////////////////////////////////////////////////////////////////
-        INumberVectorProperty ImagePixelSizeNP;
-        INumber ImagePixelSizeN[6];
+        INDI::PropertyNumber ImagePixelSizeNP {6};
 
         /////////////////////////////////////////////////////////////////////////////////////////
         /// Frame Type (Light, Bias..etc)
         /////////////////////////////////////////////////////////////////////////////////////////
-        ISwitchVectorProperty FrameTypeSP;
-        ISwitch FrameTypeS[4];
+        INDI::PropertySwitch FrameTypeSP {4};
 
         /////////////////////////////////////////////////////////////////////////////////////////
         /// Compression Toggle
         /////////////////////////////////////////////////////////////////////////////////////////
-        ISwitchVectorProperty CompressSP;
-        ISwitch CompressS[2];
-
+        INDI::PropertySwitch CompressSP {2};
         /////////////////////////////////////////////////////////////////////////////////////////
         /// FITS Binary Data
         /////////////////////////////////////////////////////////////////////////////////////////
-        IBLOBVectorProperty FitsBP;
-        IBLOB FitsB;
+        INDI::PropertyBlob FitsBP {1};
 
         /////////////////////////////////////////////////////////////////////////////////////////
         /// Reset ROI Frame to Full Resolution
         /////////////////////////////////////////////////////////////////////////////////////////
-        ISwitchVectorProperty ResetSP;
-        ISwitch ResetS[1];
+        INDI::PropertySwitch ResetSP{1};
 
         friend class CCD;
         friend class StreamRecoder;

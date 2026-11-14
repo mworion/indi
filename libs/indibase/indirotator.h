@@ -20,6 +20,8 @@
 
 #include "defaultdevice.h"
 #include "indirotatorinterface.h"
+#include "indipropertynumber.h"
+#include "indipropertyswitch.h"
 
 namespace Connection
 {
@@ -32,7 +34,7 @@ class TCP;
 
    Rotators must be able to move to a specific angle. Other capabilities including abort, syncing, homing are optional.
 
-   The angle is to be interpreted as the raw angle and not necessairly the position angle as this definition should be
+   The angle is to be interpreted as the raw angle and not necessarily the position angle as this definition should be
    handled by clients after homing and syncing.
 
    This class is designed for pure rotator devices. To utilize Rotator Interface in another type of device, inherit from RotatorInterface.
@@ -87,10 +89,8 @@ class Rotator : public DefaultDevice, public RotatorInterface
         /** \brief perform handshake with device to check communication */
         virtual bool Handshake();
 
-        INumber PresetN[3];
-        INumberVectorProperty PresetNP;
-        ISwitch PresetGotoS[3];
-        ISwitchVectorProperty PresetGotoSP;
+        INDI::PropertyNumber PresetNP {3};
+        INDI::PropertySwitch PresetGotoSP {3};
 
         Connection::Serial *serialConnection = nullptr;
         Connection::TCP *tcpConnection       = nullptr;

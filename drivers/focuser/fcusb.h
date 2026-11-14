@@ -21,7 +21,13 @@
 #pragma once
 
 #include "indifocuser.h"
-#include "hidapi.h"
+
+#ifdef _USE_SYSTEM_HIDAPILIB
+#include <hidapi/hidapi.h>
+#else
+#include <indi_hidapi.h>
+#endif
+
 
 #include <map>
 
@@ -87,9 +93,7 @@ class FCUSB : public INDI::Focuser
         struct timeval timedMoveEnd;
 
         // PWM Scaler
-        ISwitchVectorProperty PWMScalerSP;
-        ISwitch PWMScalerS[3];
-
+        INDI::PropertySwitch PWMScalerSP {3};
         // Driver Timeout in ms
         static const uint16_t FC_TIMEOUT { 1000 };
 

@@ -41,7 +41,7 @@ using namespace INDI::AlignmentSubsystem;
 // We declare an auto pointer to temma.
 static std::unique_ptr<TemmaMount> temma(new TemmaMount());
 
-TemmaMount::TemmaMount()
+TemmaMount::TemmaMount(): GI(this)
 {
     SetTelescopeCapability(TELESCOPE_CAN_PARK |
                            TELESCOPE_CAN_ABORT |
@@ -71,7 +71,7 @@ bool TemmaMount::initProperties()
 {
     INDI::Telescope::initProperties();
 
-    initGuiderProperties(getDeviceName(), MOTION_TAB);
+    GI::initProperties(MOTION_TAB);
 
     //  Temma runs at 19200 8 e 1
     serialConnection->setDefaultBaudRate(Connection::Serial::B_19200);
@@ -117,17 +117,10 @@ void TemmaMount::ISGetProperties(const char *dev)
 
 bool TemmaMount::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
 {
-    if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
-    {
-        if (strcmp(name, GuideNSNP.name) == 0 || strcmp(name, GuideWENP.name) == 0)
-        {
-            processGuiderProperties(name, values, names, n);
-            return true;
-        }
 
-        // Check alignment properties
-        //ProcessAlignmentNumberProperties(this, name, values, names, n);
-    }
+    // Check guider interface
+    if (GI::processNumber(dev, name, values, names, n))
+        return true;
 
     return INDI::Telescope::ISNewNumber(dev, name, values, names, n);
 }
@@ -190,18 +183,12 @@ bool TemmaMount::updateProperties()
             SetAxis2ParkDefault(Latitude >= 0 ? 90 : -90);
         }
 
-        defineProperty(&GuideNSNP);
-        defineProperty(&GuideWENP);
-
-        // Load location so that it could trigger mount initiailization
+        // Load location so that it could trigger mount initialization
         loadConfig(true, "GEOGRAPHIC_COORD");
 
     }
-    else
-    {
-        deleteProperty(GuideNSNP.name);
-        deleteProperty(GuideWENP.name);
-    }
+
+    GI::updateProperties();
 
     return true;
 }
@@ -212,7 +199,7 @@ bool TemmaMount::sendCommand(const char *cmd, char *response)
     char errmsg[MAXRBUF];
 
     char cmd_temma[TEMMA_BUFFER] = {0};
-    strncpy(cmd_temma, cmd, TEMMA_BUFFER);
+    snprintf(cmd_temma, TEMMA_BUFFER, "%s", cmd);
     int cmd_size = strlen(cmd_temma);
     if (cmd_size - 2 >= TEMMA_BUFFER)
     {
@@ -432,7 +419,7 @@ bool TemmaMount::ReadScopeStatus()
 
         aligned = true;
 
-        if (!TransformTelescopeToCelestial(TDV, alignedRA, alignedDEC))
+        if (!TransformTelescopeToCelestialJD(TDV, alignedRA, alignedDEC, ln_get_julian_from_sys()))
         {
             aligned = false;
             DEBUGF(INDI::AlignmentSubsystem::DBG_ALIGNMENT,
@@ -489,9 +476,9 @@ bool TemmaMount::Sync(double ra, double dec)
     targetDEC = dec;
 
     /*  sync involves jumping thru considerable hoops
-    first we have to set local sideral time
+    first we have to set local sidereal time
     then we have to send a Z
-    then we set local sideral time again
+    then we set local sidereal time again
     and finally we send the co-ordinates we are syncing on
     */
     LOG_DEBUG("Sending LST --> Z --> LST before Sync.");
@@ -539,7 +526,7 @@ bool TemmaMount::Goto(double ra, double dec)
     targetDEC = dec;
 
     /*  goto involves hoops, but, not as many as a sync
-        first set sideral time
+        first set sidereal time
         then issue the goto command
     */
     if (MotorStatus == false)
@@ -875,7 +862,7 @@ bool TemmaMount::updateLocation(double latitude, double longitude, double elevat
 
         //  We were NOT initialized, so, in case there is not park position set
         //  Sync to the position of bar vertical, telescope pointed at pole
-        LOGF_DEBUG("Temma is initilized. Latitude: %.2f LST: %.2f", latitude, lst);
+        LOGF_DEBUG("Temma is initialized. Latitude: %.2f LST: %.2f", latitude, lst);
         SetAxis1Park(lst);
 
         LOGF_INFO("Syncing to default home position %4.2f %4.2f", GetAxis1Park(), GetAxis2Park());
@@ -951,7 +938,7 @@ INDI::IEquatorialCoordinates TemmaMount::TelescopeToSky(double ra, double dec)
         eq.dec = dec;
         TDV    = TelescopeDirectionVectorFromLocalHourAngleDeclination(eq);
 
-        if (TransformTelescopeToCelestial(TDV, RightAscension, Declination))
+        if (TransformTelescopeToCelestialJD(TDV, RightAscension, Declination, ln_get_julian_from_sys()))
         {
             //  if we get here, the conversion was successful
             //LOG_DEBUG"new values %6.4f %6.4f %6.4f  %6.4f Deltas %3.0lf %3.0lf\n",ra,dec,RightAscension,Declination,(ra-RightAscension)*60,(dec-Declination)*60);
@@ -990,9 +977,9 @@ INDI::IEquatorialCoordinates TemmaMount::SkyToTelescope(double ra, double dec)
         //  if the alignment system has been turned off
         //  this transformation will fail, and we fall thru
         //  to using raw co-ordinates from the mount
-        if (TransformCelestialToTelescope(ra, dec, 0.0, TDV))
+        if (TransformCelestialToTelescopeJD(ra, dec, ln_get_julian_from_sys(), TDV))
         {
-            /*  Initial attemp, using RA/DEC co-ordinates talking to alignment system
+            /*  Initial attempt, using RA/DEC co-ordinates talking to alignment system
             EquatorialCoordinatesFromTelescopeDirectionVector(TDV,eq);
             RightAscension=eq.ra*24.0/360;
             Declination=eq.dec;
@@ -1266,7 +1253,7 @@ bool TemmaMount::SetTrackEnabled(bool enabled)
     if (enabled)
     {
         setMotorsEnabled(true);
-        return SetTrackMode(IUFindOnSwitchIndex(&TrackModeSP));
+        return SetTrackMode(TrackModeSP.findOnSwitchIndex());
     }
     else
     {
@@ -1292,7 +1279,7 @@ void TemmaMount::mountSim()
     ltv = tv;
     da  = TEMMA_SLEWRATE * dt;
 
-    /* Process per current state. We check the state of EQUATORIAL_COORDS and act acoordingly */
+    /* Process per current state. We check the state of EQUATORIAL_COORDS and act accordingly */
     switch (TrackState)
     {
 
@@ -1301,7 +1288,7 @@ void TemmaMount::mountSim()
             break;
 
         case SCOPE_TRACKING:
-            switch (IUFindOnSwitchIndex(&TrackModeSP))
+            switch (TrackModeSP.findOnSwitchIndex())
             {
                 case TRACK_SIDEREAL:
                     da = 0;
@@ -1319,8 +1306,8 @@ void TemmaMount::mountSim()
                     break;
 
                 case TRACK_CUSTOM:
-                    da = ((TrackRateN[AXIS_RA].value - TRACKRATE_SIDEREAL) / 3600.0 * dt / 15.);
-                    dx = (TrackRateN[AXIS_DE].value / 3600.0 * dt);
+                    da = ((TrackRateNP[AXIS_RA].getValue() - TRACKRATE_SIDEREAL) / 3600.0 * dt / 15.);
+                    dx = (TrackRateNP[AXIS_DE].getValue() / 3600.0 * dt);
                     break;
 
             }

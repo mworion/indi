@@ -87,8 +87,8 @@ class MoonLite : public INDI::Focuser
         bool Ack();
         /**
          * @brief sendCommand Send a string command to MoonLite.
-         * @param cmd Command to be sent, must already have the necessary delimeter ('#')
-         * @param res If not nullptr, the function will read until it detects the default delimeter ('#') up to ML_RES length.
+         * @param cmd Command to be sent, must already have the necessary delimiter ('#')
+         * @param res If not nullptr, the function will read until it detects the default delimiter ('#') up to ML_RES length.
          *        if nullptr, no read back is done and the function returns true.
          * @param silent if true, do not print any error messages.
          * @param nret if > 0 read nret chars, otherwise read to the terminator
@@ -102,6 +102,8 @@ class MoonLite : public INDI::Focuser
         bool readStepMode();
         // Read and update Temperature
         bool readTemperature();
+        // Read and update Temperature Coefficient
+		bool readTemperatureCoefficient();
         // Read and update Position
         bool readPosition();
         // Read and update speed
@@ -122,25 +124,26 @@ class MoonLite : public INDI::Focuser
         uint32_t targetPos { 0 }, lastPos { 0 }, lastTemperature { 0 };
 
         // Read Only Temperature Reporting
-        INumber TemperatureN[1];
-        INumberVectorProperty TemperatureNP;
+        INDI::PropertyNumber TemperatureNP {1};
 
         // Full/Half Step modes
-        ISwitch StepModeS[2];
-        ISwitchVectorProperty StepModeSP;
+        INDI::PropertySwitch StepModeSP {2};
 
         // Temperature Settings
-        INumber TemperatureSettingN[2];
-        INumberVectorProperty TemperatureSettingNP;
+        INDI::PropertyNumber TemperatureSettingNP {2};
+        enum
+        {
+            Calibration,
+            Coefficient
+        };
 
         // Temperature Compensation Enable/Disable
-        ISwitch TemperatureCompensateS[2];
-        ISwitchVectorProperty TemperatureCompensateSP;
+        INDI::PropertySwitch TemperatureCompensateSP {2};
 
         // MoonLite Buffer
         static const uint8_t ML_RES { 32 };
-        // MoonLite Delimeter
+        // MoonLite Delimiter
         static const char ML_DEL { '#' };
-        // MoonLite Tiemout
+        // MoonLite Timeout
         static const uint8_t ML_TIMEOUT { 3 };
 };

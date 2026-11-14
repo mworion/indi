@@ -29,33 +29,33 @@ ScopeSim::ScopeSim() :
 
 bool ScopeSim::Abort()
 {
-    if (MovementNSSP.s == IPS_BUSY)
+    if (MovementNSSP.getState() == IPS_BUSY)
     {
-        IUResetSwitch(&MovementNSSP);
-        MovementNSSP.s = IPS_IDLE;
-        IDSetSwitch(&MovementNSSP, nullptr);
+        MovementNSSP.reset();
+        MovementNSSP.setState(IPS_IDLE);
+        MovementNSSP.apply();
     }
 
-    if (MovementWESP.s == IPS_BUSY)
+    if (MovementWESP.getState() == IPS_BUSY)
     {
-        MovementWESP.s = IPS_IDLE;
-        IUResetSwitch(&MovementWESP);
-        IDSetSwitch(&MovementWESP, nullptr);
+        MovementWESP.setState(IPS_IDLE);
+        MovementWESP.reset();
+        MovementWESP.apply();
     }
 
-    if (EqNP.s == IPS_BUSY)
+    if (EqNP.getState() == IPS_BUSY)
     {
-        EqNP.s = IPS_IDLE;
-        IDSetNumber(&EqNP, nullptr);
+        EqNP.setState(IPS_IDLE);
+        EqNP.apply();
     }
 
     TrackState = SCOPE_IDLE;
 
     AxisStatusRA = AxisStatusDEC = STOPPED; // This marvelous inertia free scope can be stopped instantly!
 
-    AbortSP.s = IPS_OK;
-    IUResetSwitch(&AbortSP);
-    IDSetSwitch(&AbortSP, nullptr);
+    AbortSP.setState(IPS_OK);
+    AbortSP.reset();
+    AbortSP.apply();
     LOG_INFO("Telescope aborted.");
 
     return true;
@@ -87,7 +87,7 @@ bool ScopeSim::Goto(double ra, double dec)
     DEBUGF(DBG_SIMULATOR, "Goto - Celestial reference frame target right ascension %lf(%lf) declination %lf",
            ra * 360.0 / 24.0, ra, dec);
 
-    if (ISS_ON == IUFindSwitch(&CoordSP, "TRACK")->s)
+    if (CoordSP.isSwitchOn("TRACK"))
     {
         char RAStr[32], DecStr[32];
         fs_sexa(RAStr, ra, 2, 3600);
@@ -102,7 +102,7 @@ bool ScopeSim::Goto(double ra, double dec)
     TelescopeDirectionVector TDV;
     INDI::IHorizontalCoordinates AltAz { 0, 0 };
 
-    if (TransformCelestialToTelescope(ra, dec, 0.0, TDV))
+    if (TransformCelestialToTelescopeJD(ra, dec, ln_get_julian_from_sys(), TDV))
     {
         // The alignment subsystem has successfully transformed my coordinate
         AltitudeAzimuthFromTelescopeDirectionVector(TDV, AltAz);
@@ -197,12 +197,6 @@ bool ScopeSim::initProperties()
     /* Make sure to init parent properties first */
     INDI::Telescope::initProperties();
 
-    // Let's simulate it to be an F/10 8" telescope
-    ScopeParametersN[0].value = 203;
-    ScopeParametersN[1].value = 2000;
-    ScopeParametersN[2].value = 203;
-    ScopeParametersN[3].value = 2000;
-
     TrackState = SCOPE_IDLE;
 
     /* Add debug controls so we may debug driver if necessary */
@@ -293,7 +287,7 @@ bool ScopeSim::ReadScopeStatus()
     INDI::IHorizontalCoordinates AltAz { CurrentEncoderMicrostepsRA / MICROSTEPS_PER_DEGREE, CurrentEncoderMicrostepsDEC / MICROSTEPS_PER_DEGREE };
     TelescopeDirectionVector TDV = TelescopeDirectionVectorFromAltitudeAzimuth(AltAz);
     double RightAscension, Declination;
-    if (!TransformTelescopeToCelestial(TDV, RightAscension, Declination))
+    if (!TransformTelescopeToCelestialJD(TDV, RightAscension, Declination, ln_get_julian_from_sys()))
     {
         if (TraceThisTick)
             DEBUG(DBG_SIMULATOR, "ReadScopeStatus - TransformTelescopeToCelestial failed");
@@ -594,7 +588,7 @@ void ScopeSim::TimerHit()
         case SCOPE_SLEWING:
             if ((STOPPED == AxisStatusRA) && (STOPPED == AxisStatusDEC))
             {
-                if (ISS_ON == IUFindSwitch(&CoordSP, "TRACK")->s)
+                if (CoordSP.isSwitchOn("TRACK"))
                 {
                     // Goto has finished start tracking
                     DEBUG(DBG_SIMULATOR, "TimerHit - Goto finished start tracking");
@@ -607,8 +601,7 @@ void ScopeSim::TimerHit()
                     break;
                 }
             }
-            else
-                break;
+            break;
 
         case SCOPE_TRACKING:
         {
@@ -620,8 +613,9 @@ void ScopeSim::TimerHit()
             TelescopeDirectionVector TDV;
             INDI::IHorizontalCoordinates AltAz { 0, 0 };
 
-            if (TransformCelestialToTelescope(CurrentTrackingTarget.rightascension, CurrentTrackingTarget.declination, JulianOffset,
-                                              TDV))
+            if (TransformCelestialToTelescopeJD(CurrentTrackingTarget.rightascension,
+                                                CurrentTrackingTarget.declination,
+                                                ln_get_julian_from_sys() + JulianOffset, TDV))
                 AltitudeAzimuthFromTelescopeDirectionVector(TDV, AltAz);
             else
             {

@@ -112,7 +112,7 @@ bool ScopeScript::ISNewText(const char *dev, const char *name, char *texts[], ch
 bool ScopeScript::RunScript(int script, ...)
 {
     char tmp[256];
-    strncpy(tmp, ScriptsT[script].text, sizeof(tmp));
+    snprintf(tmp, sizeof(tmp), "%s", ScriptsT[script].text);
 
     char **args = (char **)malloc(MAXARGS * sizeof(char *));
     int arg     = 1;
@@ -237,9 +237,9 @@ bool ScopeScript::ReadScopeStatus()
         int parked = 0;
         float ra = 0, dec = 0;
         FILE *file = fopen(tmpfile, "r");
-        int ret = 0;
 
-        ret = fscanf(file, "%d %f %f", &parked, &ra, &dec);
+        int rc = fscanf(file, "%d %f %f", &parked, &ra, &dec);
+        INDI_UNUSED(rc);
         fclose(file);
         unlink(tmpfile);
         if (parked != 0)
@@ -324,7 +324,7 @@ bool ScopeScript::UnPark()
 
 bool ScopeScript::MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command)
 {
-    char _rate[] = { (char)('0' + IUFindOnSwitchIndex(&SlewRateSP)), 0 };
+    char _rate[] = { (char)('0' + SlewRateSP.findOnSwitchIndex()), 0 };
     bool status  = RunScript(command == MOTION_STOP ? SCRIPT_ABORT :
                              dir == DIRECTION_NORTH ? SCRIPT_MOVE_NORTH : SCRIPT_MOVE_SOUTH,
                              _rate, nullptr, nullptr);
@@ -333,7 +333,7 @@ bool ScopeScript::MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command)
 
 bool ScopeScript::MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command)
 {
-    char _rate[] = { (char)('0' + IUFindOnSwitchIndex(&SlewRateSP)), 0 };
+    char _rate[] = { (char)('0' + SlewRateSP.findOnSwitchIndex()), 0 };
     bool status =
         RunScript(command == MOTION_STOP ? SCRIPT_ABORT : dir == DIRECTION_WEST ? SCRIPT_MOVE_WEST : SCRIPT_MOVE_EAST,
                   _rate, nullptr, nullptr);

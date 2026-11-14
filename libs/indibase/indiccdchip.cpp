@@ -17,6 +17,7 @@
 *******************************************************************************/
 #include "indiccdchip.h"
 #include "indidevapi.h"
+#include "sharedblob.h"
 #include "locale_compat.h"
 
 #include <cstring>
@@ -39,8 +40,8 @@ CCDChip::~CCDChip()
 
 bool CCDChip::openFITSFile(uint32_t size, int &status)
 {
-    m_FITSMemorySize = size;
-    m_FITSMemoryBlock = IDSharedBlobAlloc(m_FITSMemorySize);
+    m_FITSMemorySize = size > 2880 ? 2880 : size;
+    m_FITSMemoryBlock = IDSharedBlobAlloc(size);
     if (m_FITSMemoryBlock == nullptr)
     {
         IDLog("Failed to allocate memory for FITS file.");
@@ -58,14 +59,28 @@ bool CCDChip::openFITSFile(uint32_t size, int &status)
     return (status == 0);
 }
 
-bool CCDChip::closeFITSFile()
+bool CCDChip::finishFITSFile(int &status)
 {
-    int status = 0;
+    fits_flush_file(m_FITSFilePointer, &status);
     fits_close_file(m_FITSFilePointer, &status);
-    m_FITSFilePointer = nullptr;
+    if (status == 0)
+    {
+        m_FITSFilePointer = nullptr;
+    }
+    return (status == 0);
+}
+
+void CCDChip::closeFITSFile()
+{
+    if (m_FITSFilePointer != nullptr)
+    {
+        int status = 0;
+        // Discard error here, the caller can't expect a valid file anymore at that point
+        fits_close_file(m_FITSFilePointer, &status);
+        m_FITSFilePointer = nullptr;
+    }
     IDSharedBlobFree(m_FITSMemoryBlock);
     m_FITSMemoryBlock = nullptr;
-    return (status == 0);
 }
 
 void CCDChip::setFrameType(CCD_FRAME type)
@@ -78,21 +93,21 @@ void CCDChip::setResolution(uint32_t x, uint32_t y)
     XRes = x;
     YRes = y;
 
-    ImagePixelSizeN[0].value = x;
-    ImagePixelSizeN[1].value = y;
+    ImagePixelSizeNP[0].setValue(x);
+    ImagePixelSizeNP[1].setValue(y);
 
-    IDSetNumber(&ImagePixelSizeNP, nullptr);
+    ImagePixelSizeNP.apply();
 
-    ImageFrameN[FRAME_X].min = 0;
-    ImageFrameN[FRAME_X].max = x - 1;
-    ImageFrameN[FRAME_Y].min = 0;
-    ImageFrameN[FRAME_Y].max = y - 1;
+    ImageFrameNP[FRAME_X].setMin(0);
+    ImageFrameNP[FRAME_X].setMax(x - 1);
+    ImageFrameNP[FRAME_Y].setMin(0);
+    ImageFrameNP[FRAME_Y].setMax(y - 1);
 
-    ImageFrameN[FRAME_W].min = 1;
-    ImageFrameN[FRAME_W].max = x;
-    ImageFrameN[FRAME_H].min = 1;
-    ImageFrameN[FRAME_H].max = y;
-    IUUpdateMinMax(&ImageFrameNP);
+    ImageFrameNP[FRAME_W].setMin(1);
+    ImageFrameNP[FRAME_W].setMax(x);
+    ImageFrameNP[FRAME_H].setMin(1);
+    ImageFrameNP[FRAME_H].setMax(y);
+    ImageFrameNP.updateMinMax();
 }
 
 void CCDChip::setFrame(uint32_t subx, uint32_t suby, uint32_t subw, uint32_t subh)
@@ -102,12 +117,12 @@ void CCDChip::setFrame(uint32_t subx, uint32_t suby, uint32_t subw, uint32_t sub
     SubW = subw;
     SubH = subh;
 
-    ImageFrameN[FRAME_X].value = SubX;
-    ImageFrameN[FRAME_Y].value = SubY;
-    ImageFrameN[FRAME_W].value = SubW;
-    ImageFrameN[FRAME_H].value = SubH;
+    ImageFrameNP[FRAME_X].setValue(SubX);
+    ImageFrameNP[FRAME_Y].setValue(SubY);
+    ImageFrameNP[FRAME_W].setValue(SubW);
+    ImageFrameNP[FRAME_H].setValue(SubH);
 
-    IDSetNumber(&ImageFrameNP, nullptr);
+    ImageFrameNP.apply();
 }
 
 void CCDChip::setBin(uint8_t hor, uint8_t ver)
@@ -115,40 +130,38 @@ void CCDChip::setBin(uint8_t hor, uint8_t ver)
     BinX = hor;
     BinY = ver;
 
-    ImageBinN[BIN_W].value = BinX;
-    ImageBinN[BIN_H].value = BinY;
+    ImageBinNP[BIN_W].setValue(BinX);
+    ImageBinNP[BIN_H].setValue(BinY);
 
-    IDSetNumber(&ImageBinNP, nullptr);
+    ImageBinNP.apply();
 }
 
 void CCDChip::setMinMaxStep(const char *property, const char *element, double min, double max, double step,
                             bool sendToClient)
 {
-    INumberVectorProperty *nvp = nullptr;
-
-    if (!strcmp(property, ImageExposureNP.name))
-        nvp = &ImageExposureNP;
-    else if (!strcmp(property, ImageFrameNP.name))
-        nvp = &ImageFrameNP;
-    else if (!strcmp(property, ImageBinNP.name))
-        nvp = &ImageBinNP;
-    else if (!strcmp(property, ImagePixelSizeNP.name))
-        nvp = &ImagePixelSizeNP;
-    //    else if (!strcmp(property, RapidGuideDataNP.name))
-    //        nvp = &RapidGuideDataNP;
-    else
-        return;
-
-    INumber *np = IUFindNumber(nvp, element);
-    if (np)
+    auto updateMinMaxStep = [element, min, max, step, sendToClient](INDI::PropertyNumber & oneProperty)
     {
-        np->min  = min;
-        np->max  = max;
-        np->step = step;
+        auto oneElement = oneProperty.findWidgetByName(element);
+        if(oneElement)
+        {
+            oneElement->setMinMax(min, max);
+            oneElement->setStep(step);
+            if(sendToClient)
+            {
+                oneProperty.updateMinMax();
+            }
+        }
+    };
 
-        if (sendToClient)
-            IUUpdateMinMax(nvp);
-    }
+    if (ImageExposureNP.isNameMatch(property))
+        updateMinMaxStep(ImageExposureNP);
+    else if (ImageFrameNP.isNameMatch(property))
+        updateMinMaxStep(ImageFrameNP);
+    else if (ImageBinNP.isNameMatch(property))
+        updateMinMaxStep(ImageBinNP);
+
+    else if (ImagePixelSizeNP.isNameMatch(property))
+        updateMinMaxStep(ImagePixelSizeNP);
 }
 
 void CCDChip::setPixelSize(double x, double y)
@@ -156,20 +169,20 @@ void CCDChip::setPixelSize(double x, double y)
     PixelSizeX = x;
     PixelSizeY = y;
 
-    ImagePixelSizeN[2].value = x;
-    ImagePixelSizeN[3].value = x;
-    ImagePixelSizeN[4].value = y;
+    ImagePixelSizeNP[2].setValue(x);
+    ImagePixelSizeNP[3].setValue(x);
+    ImagePixelSizeNP[4].setValue(y);
 
-    IDSetNumber(&ImagePixelSizeNP, nullptr);
+    ImagePixelSizeNP.apply();
 }
 
 void CCDChip::setBPP(uint8_t bbp)
 {
     BitsPerPixel = bbp;
 
-    ImagePixelSizeN[5].value = BitsPerPixel;
+    ImagePixelSizeNP[5].setValue(BitsPerPixel);
 
-    IDSetNumber(&ImagePixelSizeNP, nullptr);
+    ImagePixelSizeNP.apply();
 }
 
 void CCDChip::setFrameBufferSize(uint32_t nbuf, bool allocMem)
@@ -183,23 +196,29 @@ void CCDChip::setFrameBufferSize(uint32_t nbuf, bool allocMem)
         return;
 
     RawFrame = static_cast<uint8_t*>(IDSharedBlobRealloc(RawFrame, RawFrameSize));
+    if (RawFrame == nullptr)
+        RawFrame = static_cast<uint8_t * >(IDSharedBlobAlloc(RawFrameSize));
 
     if (BinFrame)
+    {
         BinFrame = static_cast<uint8_t*>(IDSharedBlobRealloc(BinFrame, RawFrameSize));
+        if (BinFrame == nullptr)
+            BinFrame = static_cast<uint8_t * >(IDSharedBlobAlloc(RawFrameSize));
+    }
 }
 
 void CCDChip::setExposureLeft(double duration)
 {
-    ImageExposureNP.s = IPS_BUSY;
-    ImageExposureN[0].value = duration;
-    IDSetNumber(&ImageExposureNP, nullptr);
+    ImageExposureNP.setState(IPS_BUSY);
+    ImageExposureNP[0].setValue(duration);
+    ImageExposureNP.apply();
 }
 
 void CCDChip::setExposureComplete()
 {
-    ImageExposureNP.s = IPS_OK;
-    ImageExposureN[0].value = 0;
-    IDSetNumber(&ImageExposureNP, nullptr);
+    ImageExposureNP.setState(IPS_OK);
+    ImageExposureNP[0].setValue(0);
+    ImageExposureNP.apply();
 }
 
 void CCDChip::setExposureDuration(double duration)
@@ -210,7 +229,7 @@ void CCDChip::setExposureDuration(double duration)
 
 const char *CCDChip::getFrameTypeName(CCD_FRAME fType)
 {
-    return FrameTypeS[fType].name;
+    return FrameTypeSP[fType].getName();
 }
 
 const char *CCDChip::getExposureStartTime()
@@ -242,8 +261,8 @@ const char *CCDChip::getExposureStartTime()
 
 void CCDChip::setExposureFailed()
 {
-    ImageExposureNP.s = IPS_ALERT;
-    IDSetNumber(&ImageExposureNP, nullptr);
+    ImageExposureNP.setState(IPS_ALERT);
+    ImageExposureNP.apply();
 }
 
 int CCDChip::getNAxis() const
@@ -258,7 +277,7 @@ void CCDChip::setNAxis(int value)
 
 void CCDChip::setImageExtension(const char *ext)
 {
-    strncpy(ImageExtention, ext, MAXINDIBLOBFMT);
+    snprintf(ImageExtention, MAXINDIBLOBFMT, "%s", ext);
 }
 
 void CCDChip::binFrame()
@@ -268,12 +287,12 @@ void CCDChip::binFrame()
 
     // Jasem: Keep full frame shadow in memory to enhance performance and just swap frame pointers after operation is complete
     if (BinFrame == nullptr)
-        BinFrame = static_cast<uint8_t*>(IDSharedBlobAlloc(RawFrameSize));
+        BinFrame = static_cast<uint8_t * >(IDSharedBlobAlloc(RawFrameSize));
     else
     {
         BinFrame = static_cast<uint8_t*>(IDSharedBlobRealloc(BinFrame, RawFrameSize));
         if (BinFrame == nullptr)
-            BinFrame = static_cast<uint8_t*>(IDSharedBlobAlloc(RawFrameSize));
+            BinFrame = static_cast<uint8_t * >(IDSharedBlobAlloc(RawFrameSize));
     }
 
     memset(BinFrame, 0, RawFrameSize);
@@ -361,12 +380,12 @@ void CCDChip::binBayerFrame()
 
     // Jasem: Keep full frame shadow in memory to enhance performance and just swap frame pointers after operation is complete
     if (BinFrame == nullptr)
-        BinFrame = static_cast<uint8_t*>(IDSharedBlobAlloc(RawFrameSize));
+        BinFrame = static_cast<uint8_t * >(IDSharedBlobAlloc(RawFrameSize));
     else
     {
         BinFrame = static_cast<uint8_t*>(IDSharedBlobRealloc(BinFrame, RawFrameSize));
         if (BinFrame == nullptr)
-            BinFrame = static_cast<uint8_t*>(IDSharedBlobAlloc(RawFrameSize));
+            BinFrame = static_cast<uint8_t * >(IDSharedBlobAlloc(RawFrameSize));
     }
 
     memset(BinFrame, 0, RawFrameSize);

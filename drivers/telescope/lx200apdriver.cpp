@@ -46,7 +46,7 @@ unsigned int AP_DBG_SCOPE;
 
 void set_lx200ap_name(const char *deviceName, unsigned int debug_level)
 {
-    strncpy(lx200ap_name, deviceName, MAXINDIDEVICE);
+    snprintf(lx200ap_name, MAXINDIDEVICE, "%s", deviceName);
     AP_DBG_SCOPE = debug_level;
 }
 
@@ -405,9 +405,9 @@ int getAPWormPosition(int fd, int *position)
     return -1;
 }
 
-int selectAPMoveToRate(int fd, int moveToRate)
+int selectAPMoveToRate(int fd, int moveToIndex)
 {
-    switch (moveToRate)
+    switch (moveToIndex)
     {
         case 0:
             return sendAPCommand(fd, "#:RC0#", "selectAPMoveToRate: Setting move to rate to 12x");
@@ -423,16 +423,16 @@ int selectAPMoveToRate(int fd, int moveToRate)
     return 0;
 }
 
-int selectAPSlewRate(int fd, int slewRate)
+int selectAPSlewRate(int fd, int slewIndex)
 {
-    switch (slewRate)
+    switch (slewIndex)
     {
         case 0:
-            return sendAPCommand(fd, "#:RS0#", "selectAPSlewRate: Setting slew to rate to 600x");
+            return sendAPCommand(fd, "#:RS0#", "selectAPSlewRate: Setting slew to rate to index 0");
         case 1:
-            return sendAPCommand(fd, "#:RS1#", "selectAPSlewRate: Setting slew to rate to 900x");
+            return sendAPCommand(fd, "#:RS1#", "selectAPSlewRate: Setting slew to rate to index 1");
         case 2:
-            return sendAPCommand(fd, "#:RS2#", "selectAPSlewRate: Setting slew to rate to 1200x");
+            return sendAPCommand(fd, "#:RS2#", "selectAPSlewRate: Setting slew to rate to index 2");
         default:
             return -1;
     }
@@ -706,9 +706,9 @@ int APUnParkMount(int fd)
 // and is required some the experimental AP driver properly handles
 // pulse guide requests over 999ms by simulated it by setting the move rate
 // to GUIDE and then starting and halting a move of the correct duration.
-int selectAPCenterRate(int fd, int centerRate)
+int selectAPCenterRate(int fd, int centerIndex)
 {
-    switch (centerRate)
+    switch (centerIndex)
     {
         case 0:
             return sendAPCommand(fd, "#:RG#", "selectAPMoveToRate: Setting move to rate to GUIDE");
@@ -722,6 +722,38 @@ int selectAPCenterRate(int fd, int centerRate)
             return sendAPCommand(fd, "#:RC3#", "selectAPMoveToRate: Setting move to rate to 1200x");
         default:
             return -1;
+    }
+    return 0;
+}
+
+int selectAPV2CenterRate(int fd, int centerIndex, APRateTableState rateTable)
+{
+    if (rateTable == AP_RATE_TABLE_DEFAULT) // If no rate table, do as we always have
+        return selectAPCenterRate(fd, centerIndex);
+
+    else
+    {
+        switch (centerIndex)
+        {
+            case 0:
+                return sendAPCommand(fd, "#:RC5#", "selectAPMoveToRate: Setting center rate to 0.25x");
+            case 1:
+                return sendAPCommand(fd, "#:RC6#", "selectAPMoveToRate: Setting center rate to 0.5x");
+            case 2:
+                return sendAPCommand(fd, "#:RC7#", "selectAPMoveToRate: Setting center rate to 1.0x");
+            case 3:
+                return sendAPCommand(fd, "#:RC0#", "selectAPMoveToRate: Setting center rate to 12");
+            case 4:
+                return sendAPCommand(fd, "#:RC1#", "selectAPMoveToRate: Setting center rate to 64x");
+            case 5:
+                return sendAPCommand(fd, "#:RC2#", "selectAPMoveToRate: Setting center rate to 200x");
+            case 6:
+                return sendAPCommand(fd, "#:RC3#", "selectAPMoveToRate: Setting center rate to index 3");
+            case 7:
+                return sendAPCommand(fd, "#:RC4#", "selectAPMoveToRate: Setting center rate to index 4");
+            default:
+                return -1;
+        }
     }
     return 0;
 }
@@ -741,7 +773,7 @@ int selectAPCenterRate(int fd, int centerRate)
 //                                        'C'=Custom RA Tracking Rate (read specific value with :Rr# command)
 // C: Dec Tracking Status                 '9'=No Motion (to mimic RA Tracking), 'C'=Custom DEC Tracking Rate
 //                                        (read specific value with :Rd# command)
-// D: Slewing Satus (GOTO Slews)          'S'=Slewing, '0'=Not slewing
+// D: Slewing Status (GOTO Slews)         'S'=Slewing, '0'=Not slewing
 // E: Moving RA Axis                      'E'=Moving East, 'W'=Moving West, '0'=Not Moving
 //    (via a Move command/Slew/ST4 Port signal)
 // F: Moving Dec Axis                     'N'=Moving North (counter-clockwise), 'S'=Moving South (clockwise), '0'=Not Moving
@@ -808,7 +840,7 @@ int getApStatusStringInternal(int fd, char *statusString, bool complain)
 
 int getApStatusString(int fd, char *statusString)
 {
-    // I seem to get intermittant failures.
+    // I seem to get intermittent failures.
     // Try again on these after a 50ms delay, and the 250ms delay.
     if (getApStatusStringInternal(fd, statusString, false) != TTY_OK)
     {
@@ -895,7 +927,6 @@ APRateTableState apRateTable(const char *statusString)
     {
         switch (statusString[13])
         {
-
             case '0':
                 return AP_RATE_TABLE_0;
                 break;

@@ -88,6 +88,7 @@ class Weather : public DefaultDevice, public WeatherInterface
         Weather();
 
         virtual bool initProperties() override;
+        virtual void ISGetProperties(const char *dev) override;
         virtual bool updateProperties() override;
         virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
         virtual bool ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n) override;
@@ -96,12 +97,6 @@ class Weather : public DefaultDevice, public WeatherInterface
         virtual bool ISSnoopDevice(XMLEle *root) override;
 
     protected:
-        /**
-         * @brief TimerHit Keep calling updateWeather() until it is successful, if it fails upon first
-         * connection.
-         */
-        virtual void TimerHit() override;
-
         /** \brief Update weather station location
          *  \param latitude Site latitude in degrees.
          *  \param longitude Site latitude in degrees increasing eastward from Greenwich (0 to 360).
@@ -128,34 +123,19 @@ class Weather : public DefaultDevice, public WeatherInterface
         /** \brief perform handshake with device to check communication */
         virtual bool Handshake();
 
-        // A number vector that stores lattitude and longitude
-        INumberVectorProperty LocationNP;
-        INumber LocationN[3];
+        // A number vector that stores latitude and longitude
+        INDI::PropertyNumber LocationNP {3};
 
         // Active devices to snoop
-        ITextVectorProperty ActiveDeviceTP;
-        IText ActiveDeviceT[1] {};
-
-        // Update Period
-        INumber UpdatePeriodN[1];
-        INumberVectorProperty UpdatePeriodNP;
-
-        // Refresh data
-        ISwitch RefreshS[1];
-        ISwitchVectorProperty RefreshSP;
-
-        // Override
-        ISwitch OverrideS[1];
-        ISwitchVectorProperty OverrideSP;
+        INDI::PropertyText ActiveDeviceTP {1};
 
         Connection::Serial *serialConnection {nullptr};
         Connection::TCP *tcpConnection       {nullptr};
 
         int PortFD = -1;
-        int updateTimerID { -1 };
 
     private:
-        bool processLocationInfo(double latitude, double longitude, double elevation);
+        void processLocationInfo(double latitude, double longitude, double elevation);
 
         bool callHandshake();
         uint8_t weatherConnection = CONNECTION_SERIAL | CONNECTION_TCP;

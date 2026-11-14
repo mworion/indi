@@ -135,6 +135,7 @@ enum TFreq
 
 /* GET Int from device and store in supplied pointer to integer x */
 #define getUTCOffset(fd, x)         getCommandInt(fd, x, ":GG#")
+#define getDaylightSaving(fd, x)    getCommandInt(fd, x, ":GH#")
 #define getMaxElevationLimit(fd, x) getCommandInt(fd, x, ":Go#")
 #define getMinElevationLimit(fd, x) getCommandInt(fd, x, ":Gh#")
 
@@ -144,7 +145,7 @@ enum TFreq
 #define setFocuserSpeed(fd, x)          setCommandInt(fd, x, ":F")
 #define setSlewSpeed(fd, x)             setCommandInt(fd, x, ":Sw")
 
-/* GPS Specefic */
+/* GPS Specific */
 #define turnGPSOn(fd)                   write(fd, ":g+#", 4)
 #define turnGPSOff(fd)                  write(fd, ":g-#", 4)
 #define alignGPSScope(fd)               write(fd, ":Aa#", 4)
@@ -174,7 +175,7 @@ enum TFreq
 #define initTelescope(fd)             write(fd, ":I#", 3)
 
 /**************************************************************************
- Basic I/O - OBSELETE
+ Basic I/O - OBSOLETE
 **************************************************************************/
 /*int openPort(const char *portID);
 int portRead(char *buf, int nbytes, int timeout);
@@ -211,7 +212,7 @@ int getSiteLongitude(int fd, int *ddd, int *mm, double *ssf);
 int getSiteLatitudeAlt(int fd, int *dd, int *mm, double *ssf, const char *cmd);
 /* Get site Longitude */
 int getSiteLongitudeAlt(int fd, int *ddd, int *mm, double *ssf, const char *cmd);
-/* Get Calender data */
+/* Get Calendar data */
 int getCalendarDate(int fd, char *date);
 /* Get site Name */
 int getSiteName(int fd, char *siteName, int siteNum);
@@ -244,7 +245,7 @@ int setAlignmentMode(int fd, unsigned int alignMode);
 int setObjectRA(int fd, double ra, bool addSpace = false);
 /* set Object DEC */
 int setObjectDEC(int fd, double dec, bool addSpace = false);
-/* Set Calender date */
+/* Set Calendar date */
 int setCalenderDate(int fd, int dd, int mm, int yy, bool addSpace = false);
 /* Set UTC offset */
 int setUTCOffset(int fd, double hours);
@@ -298,7 +299,7 @@ int selectTrackingMode(int fd, int trackMode);
 /* Is Slew complete? 0 if complete, 1 if in progress, otherwise return an error */
 int isSlewComplete(int fd);
 /* Send Pulse-Guide command (timed guide move), two valid directions can be stacked */
-int SendPulseCmd(int fd, int direction, int duration_msec);
+int SendPulseCmd(int fd, int direction, int duration_msec, bool wait_after_command=false, int max_wait_ms=1000);
 
 /**************************************************************************
  Other Commands

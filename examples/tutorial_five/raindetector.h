@@ -11,7 +11,7 @@
 
 /** \file raindetector.h
 *   \brief Construct a rain detector device that the user may operate to raise a rain alert. This rain light property defined by this driver is \e snooped by the Dome driver
-*         then takes whatever appropiate action to protect the dome.
+*         then takes whatever appropriate action to protect the dome.
 *   \author Jasem Mutlaq
 *
 *   \example raindetector.h
@@ -20,7 +20,9 @@
 
 #pragma once
 
-#include "defaultdevice.h"
+#include <defaultdevice.h>
+#include <indipropertylight.h>
+#include <indipropertyswitch.h>
 
 class RainDetector : public INDI::DefaultDevice
 {
@@ -29,7 +31,6 @@ class RainDetector : public INDI::DefaultDevice
 
     protected:
         // General device functions
-        bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
         bool Connect() override;
         bool Disconnect() override;
         const char *getDefaultName() override;
@@ -37,9 +38,6 @@ class RainDetector : public INDI::DefaultDevice
         bool updateProperties() override;
 
     private:
-        ILight RainL[1];
-        ILightVectorProperty RainLP;
-
-        ISwitch RainS[2];
-        ISwitchVectorProperty RainSP;
+        INDI::PropertyLight  mRainLight  {1};
+        INDI::PropertySwitch mRainSwitch {2};
 };

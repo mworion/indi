@@ -26,96 +26,121 @@
 class Group;
 class Imager : public virtual INDI::DefaultDevice, public virtual INDI::BaseClient
 {
-    public:
-        static const std::string DEVICE_NAME;
-        Imager();
-        virtual ~Imager() = default;
+public:
+    static const std::string DEVICE_NAME;
+    Imager();
+    virtual ~Imager() = default;
 
-        // DefaultDevice
+    // DefaultDevice
 
-        virtual bool initProperties() override;
-        virtual bool updateProperties() override;
-        virtual void ISGetProperties(const char *dev) override;
-        virtual bool ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n) override;
-        virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
-        virtual bool ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n) override;
-        virtual bool ISNewBLOB(const char *dev, const char *name, int sizes[], int blobsizes[], char *blobs[],
-                               char *formats[], char *names[], int n) override;
-        virtual bool ISSnoopDevice(XMLEle *root) override;
+    virtual bool initProperties() override;
+    virtual bool updateProperties() override;
+    virtual void ISGetProperties(const char *dev) override;
+    virtual bool ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n) override;
+    virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
+    virtual bool ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n) override;
+    virtual bool ISNewBLOB(const char *dev, const char *name, int sizes[], int blobsizes[], char *blobs[],
+                           char *formats[], char *names[], int n) override;
+    virtual bool ISSnoopDevice(XMLEle *root) override;
 
-        // BaseClient
+    // BaseClient
 
-        virtual void newDevice(INDI::BaseDevice *dp) override;
-        virtual void newProperty(INDI::Property *property) override;
-        virtual void removeProperty(INDI::Property *property) override;
-        virtual void removeDevice(INDI::BaseDevice *dp) override;
-        virtual void newBLOB(IBLOB *bp) override;
-        virtual void newSwitch(ISwitchVectorProperty *svp) override;
-        virtual void newNumber(INumberVectorProperty *nvp) override;
-        virtual void newText(ITextVectorProperty *tvp) override;
-        virtual void newLight(ILightVectorProperty *lvp) override;
-        virtual void newMessage(INDI::BaseDevice *dp, int messageID) override;
-        virtual void serverConnected() override;
-        virtual void serverDisconnected(int exit_code) override;
+    virtual void newDevice(INDI::BaseDevice baseDevice) override;
+    virtual void newProperty(INDI::Property property) override;
+    virtual void updateProperty(INDI::Property property) override;
 
-    protected:
-        virtual const char *getDefaultName() override;
-        virtual bool Connect() override;
-        virtual bool Disconnect() override;
+    virtual void serverConnected() override;
+    virtual void serverDisconnected(int exit_code) override;
 
-    private:
-        bool isRunning();
-        bool isCCDConnected();
-        bool isFilterConnected();
-        void defineProperties();
-        void deleteProperties();
-        void initiateNextFilter();
-        void initiateNextCapture();
-        void startBatch();
-        void abortBatch();
-        void batchDone();
-        void initiateDownload();
+protected:
+    virtual const char *getDefaultName() override;
+    virtual bool Connect() override;
+    virtual bool Disconnect() override;
 
-        char format[16];
-        int group { 0 };
-        int maxGroup { 0 };
-        int image { 0 };
-        int maxImage { 0 };
-        const char *controlledCCD { nullptr };
-        const char *controlledFilterWheel { nullptr };
+private:
+    bool isRunning();
+    bool isCCDConnected();
+    bool isFilterConnected();
+    void defineProperties();
+    void deleteProperties();
+    void initiateNextFilter();
+    void initiateNextCapture();
+    void startBatch();
+    void abortBatch();
+    void batchDone();
+    void initiateDownload();
 
-        ITextVectorProperty ControlledDeviceTP;
-        IText ControlledDeviceT[2] {};
-        INumberVectorProperty GroupCountNP;
-        INumber GroupCountN[1];
-        INumberVectorProperty ProgressNP;
-        INumber ProgressN[3];
-        ISwitchVectorProperty BatchSP;
-        ISwitch BatchS[2];
-        ILightVectorProperty StatusLP;
-        ILight StatusL[2];
-        ITextVectorProperty ImageNameTP;
-        IText ImageNameT[2];
-        INumberVectorProperty DownloadNP;
-        INumber DownloadN[2];
-        IBLOBVectorProperty FitsBP;
-        IBLOB FitsB[1];
+    char format[16];
+    int group { 0 };
+    int maxGroup { 0 };
+    int image { 0 };
+    int maxImage { 0 };
+    const char *controlledCCD { nullptr };
+    const char *controlledFilterWheel { nullptr };
 
-        INumberVectorProperty CCDImageExposureNP;
-        INumber CCDImageExposureN[1];
-        INumberVectorProperty CCDImageBinNP;
-        INumber CCDImageBinN[2];
-        ISwitch CCDUploadS[3];
-        ISwitchVectorProperty CCDUploadSP;
-        IText CCDUploadSettingsT[2] {};
-        ITextVectorProperty CCDUploadSettingsTP;
+    INDI::PropertyText ControlledDeviceTP {2};
+    enum
+    {
+        CCD,
+        FILTER
+    };
 
-        INumberVectorProperty FilterSlotNP;
-        INumber FilterSlotN[1];
+    INDI::PropertyNumber GroupCountNP {1};
 
-        std::vector<std::shared_ptr<Group>> groups;
-        std::shared_ptr<Group> currentGroup() const;
-        std::shared_ptr<Group> nextGroup() const;
-        std::shared_ptr<Group> getGroup(int index) const;
+    INDI::PropertyNumber ProgressNP {3};
+    enum
+    {
+        GROUP,
+        IMAGE,
+        REMAINING_TIME
+    };
+    INDI::PropertySwitch BatchSP {2};
+    enum
+    {
+        START,
+        ABORT
+    };
+    INDI::PropertyLight StatusLP {2};
+
+    INDI::PropertyText ImageNameTP {2};
+    enum
+    {
+        IMAGE_FOLDER,
+        IMAGE_NAME_PREFIX
+    };
+
+    INDI::PropertyNumber DownloadNP {2};
+    INDI::PropertyBlob FitsBP {1};
+
+    INDI::PropertyNumber CCDImageExposureNP {1};
+    INDI::PropertyNumber CCDImageBinNP {2};
+    enum
+    {
+        HOR_BIN,
+        VER_BIN
+    };
+    INDI::PropertySwitch CCDUploadSP {3};
+    enum
+    {
+        UPLOAD_CLIENT,
+        UPLOAD_LOCAL,
+        UPLOAD_BOTH
+    };
+
+    INDI::PropertyText CCDUploadSettingsTP {2};
+    enum
+    {
+        UPLOAD_DIR,
+        UPLOAD_PREFIX
+    };
+
+//    ITextVectorProperty CCDUploadSettingsTP;
+
+    INDI::PropertyNumber FilterSlotNP {1};
+
+    std::vector<std::shared_ptr<Group>> groups;
+    std::shared_ptr<Group> currentGroup() const;
+    std::shared_ptr<Group> nextGroup() const;
+    std::shared_ptr<Group> getGroup(int index) const;
 
 };

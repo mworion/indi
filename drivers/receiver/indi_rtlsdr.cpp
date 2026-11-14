@@ -1,4 +1,4 @@
-/*
+﻿/*
     indi_rtlsdr - a software defined radio driver for INDI
     Copyright (C) 2017  Ilia Platone - Jasem Mutlaq
     Collaborators:
@@ -49,31 +49,55 @@ static pthread_mutex_t condMutex = PTHREAD_MUTEX_INITIALIZER;
 
 void RTLSDR::Callback()
 {
-    b_read  = 0;
-    to_read = getSampleRate() * IntegrationRequest * getBPS() / 8;
-    setBufferSize(to_read);
-
-    int len            = min(MAX_FRAME_SIZE, to_read);
-    int olen           = 0;
-    unsigned char *buf = (unsigned char *)malloc(len);
+    LOG_INFO("Integration started...");
+    b_read = 0;
+    n_read = 0;
+    setBufferSize(getSampleRate() * IntegrationRequest * getBPS() / 16);
+    setBufferSize(getBufferSize() + MAX_FRAME_SIZE - (getBufferSize() % MAX_FRAME_SIZE));
+    to_read = getBufferSize();
+    buffer = (unsigned char *)realloc(buffer, min(MAX_FRAME_SIZE, getBufferSize()));
     if((getSensorConnection() & CONNECTION_TCP) == 0)
         rtlsdr_reset_buffer(rtl_dev);
     else
-        tcflush(PortFD, TCOFLUSH);
+        tcflush(PortFD, TCIFLUSH);
     setIntegrationTime(IntegrationRequest);
+    InIntegration = true;
+    real = getReal();
+    imaginary = getImaginary();
+    gettimeofday(&IntStart, nullptr);
     while (InIntegration)
     {
-        if((getSensorConnection() & CONNECTION_TCP) == 0)
-            rtlsdr_read_sync(rtl_dev, buf, len, &olen);
-        else
-            olen = read(PortFD, buf, len);
-        if(olen < 0 )
-            AbortIntegration();
-        else
+        if (to_read > 0)
         {
-            buffer = buf;
-            n_read = olen;
-            grabData();
+            if((getSensorConnection() & CONNECTION_TCP) == 0)
+                rtlsdr_read_sync(rtl_dev, buffer + b_read, min(MAX_FRAME_SIZE, to_read), &n_read);
+            else
+                n_read = read(PortFD, buffer + b_read, min(MAX_FRAME_SIZE, to_read));
+
+            if (n_read > 0) {
+                b_read += n_read;
+                to_read -= n_read;
+            }
+        } else {
+            for(int x = 0; x < getBufferSize() / 2; x++) {
+                real[x] = buffer[x*2];
+                imaginary[x] = buffer[x*2+1];
+            }
+            setReal(real);
+            setImaginary(imaginary);
+            if(!streamPredicate)
+            {
+                InIntegration = false;
+                IntegrationComplete();
+            }
+            else
+            {
+                Streamer->newFrame(getBuffer(), getBufferSize());
+                to_read = getBufferSize();
+                b_read = 0;
+                n_read = 0;
+            }
+            LOG_INFO("Download complete.");
         }
     }
 }
@@ -119,6 +143,7 @@ RTLSDR::RTLSDR(int32_t index)
     // We set the Receiver capabilities
     uint32_t cap = SENSOR_CAN_ABORT | SENSOR_HAS_STREAMING | SENSOR_HAS_DSP;
     SetReceiverCapability(cap);
+    buffer = (unsigned char*)malloc(1);
 }
 
 bool RTLSDR::Connect()
@@ -132,6 +157,7 @@ bool RTLSDR::Connect()
             return false;
         }
     }
+
     return true;
 }
 /**************************************************************************************
@@ -172,13 +198,13 @@ bool RTLSDR::initProperties()
     // Must init parent properties first!
     INDI::Receiver::initProperties();
 
-    setMinMaxStep("SENSOR_INTEGRATION", "SENSOR_INTEGRATION_VALUE", 0.001, 600, 0.001, false);
-    setMinMaxStep("RECEIVER_SETTINGS", "RECEIVER_FREQUENCY", 2.4e+7, 2.0e+9, 1, false);
-    setMinMaxStep("RECEIVER_SETTINGS", "RECEIVER_SAMPLERATE", 2.5e+5, 2.0e+6, 2.5e+5, false);
-    setMinMaxStep("RECEIVER_SETTINGS", "RECEIVER_GAIN", 0.0, 25.0, 0.1, false);
-    setMinMaxStep("RECEIVER_SETTINGS", "RECEIVER_BANDWIDTH", 2.5e+5, 2.0e+6, 2.5e+5, false);
-    setMinMaxStep("RECEIVER_SETTINGS", "RECEIVER_BITSPERSAMPLE", 16, 16, 0, false);
-    setMinMaxStep("RECEIVER_SETTINGS", "RECEIVER_ANTENNA", 1, 1, 0, false);
+    setMinMaxStep("SENSOR_INTEGRATION", "SENSOR_INTEGRATION_VALUE", 0.001, 600, 0.001);
+    setMinMaxStep("RECEIVER_SETTINGS", "RECEIVER_FREQUENCY", 2.4e+7, 2.0e+9, 1);
+    setMinMaxStep("RECEIVER_SETTINGS", "RECEIVER_SAMPLERATE", 2.5e+5, 2.0e+6, 2.5e+5);
+    setMinMaxStep("RECEIVER_SETTINGS", "RECEIVER_GAIN", 0.0, 25.0, 0.1);
+    setMinMaxStep("RECEIVER_SETTINGS", "RECEIVER_BANDWIDTH", 2.5e+5, 2.0e+6, 2.5e+5);
+    setMinMaxStep("RECEIVER_SETTINGS", "RECEIVER_BITSPERSAMPLE", 16, 16, 1);
+    setMinMaxStep("RECEIVER_SETTINGS", "RECEIVER_ANTENNA", 1, 1, 0, true);
     setIntegrationFileExtension("fits");
 
     // Add Debug, Simulator, and Configuration controls
@@ -190,7 +216,7 @@ bool RTLSDR::initProperties()
 
 /********************************************************************************************
 ** INDI is asking us to update the properties because there is a change in CONNECTION status
-** This fucntion is called whenever the device is connected or disconnected.
+** This function is called whenever the device is connected or disconnected.
 *********************************************************************************************/
 bool RTLSDR::updateProperties()
 {
@@ -199,7 +225,7 @@ bool RTLSDR::updateProperties()
 
     if (isConnected())
     {
-        // Inital values
+        // Initial values
         setupParams(1000000, 1420000000, 10);
 
         // Start the timer
@@ -314,15 +340,9 @@ bool RTLSDR::StartIntegration(double duration)
     IntegrationRequest = static_cast<float>(duration);
     AbortIntegration();
 
-    LOG_INFO("Integration started...");
     // Run threads
     std::thread(&RTLSDR::Callback, this).detach();
-    gettimeofday(&IntStart, nullptr);
-    InIntegration = true;
     return true;
-
-    // We're done
-    return false;
 }
 
 /**************************************************************************************
@@ -388,32 +408,6 @@ void RTLSDR::TimerHit()
 ***************************************************************************************/
 void RTLSDR::grabData()
 {
-    if (InIntegration)
-    {
-        n_read    = min(to_read, n_read);
-        continuum = getBuffer();
-        if (n_read > 0)
-        {
-            memcpy(continuum + b_read, buffer, n_read);
-            b_read += n_read;
-            to_read -= n_read;
-        }
-
-        if (to_read <= 0)
-        {
-            InIntegration = false;
-            if(!streamPredicate)
-            {
-                LOG_INFO("Download complete.");
-                IntegrationComplete();
-            }
-            else
-            {
-                StartIntegration(1.0 / Streamer->getTargetFPS());
-                Streamer->newFrame(getBuffer(), getBufferSize());
-            }
-        }
-    }
 }
 
 //Streamer API functions

@@ -25,7 +25,7 @@
 class IndiClientMock;
 
 /**
- * Instanciate a fake indi server
+ * Instantiate a fake indi server
  */
 class ServerMock
 {
@@ -40,6 +40,9 @@ class ServerMock
         void listen(const std::string &unixPath);
 
         void accept(IndiClientMock &into);
+
+        // TCP port of the listening socket (useful when listening on port 0)
+        int tcpPort() const;
 
         void close();
 };

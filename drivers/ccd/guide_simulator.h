@@ -18,9 +18,11 @@
 
 #pragma once
 
-#include "indiccd.h"
-#include "indifilterinterface.h"
+#include <indiccd.h>
+#include "sky_renderer.h"
+#include "simulator_clock.h"
 #include "indipropertyswitch.h"
+#include "fitskeyword.h"
 
 /**
  * @brief The GuideSim class provides an advanced simulator for a CCD that includes a dedicated on-board guide chip.
@@ -53,6 +55,7 @@ class GuideSim : public INDI::CCD
         void ISGetProperties(const char *dev) override;
 
         virtual bool ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n) override;
+        virtual bool ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n) override;
         virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
         virtual bool ISSnoopDevice(XMLEle *root) override;
 
@@ -72,109 +75,158 @@ class GuideSim : public INDI::CCD
 
         int DrawCcdFrame(INDI::CCDChip *targetChip);
 
-        int DrawImageStar(INDI::CCDChip *targetChip, float, float, float, float ExposureTime);
-        int AddToPixel(INDI::CCDChip *targetChip, int, int, int);
-
         virtual IPState GuideNorth(uint32_t) override;
         virtual IPState GuideSouth(uint32_t) override;
         virtual IPState GuideEast(uint32_t) override;
         virtual IPState GuideWest(uint32_t) override;
 
         virtual bool saveConfigItems(FILE *fp) override;
-        virtual void addFITSKeywords(INDI::CCDChip *targetChip) override;
+        virtual void addFITSKeywords(INDI::CCDChip *targetChip, std::vector<INDI::FITSRecord> &fitsKeywords) override;
         virtual void activeDevicesUpdated() override;
-        virtual int SetTemperature(double temperature) override;
         virtual bool UpdateCCDFrame(int x, int y, int w, int h) override;
         virtual bool UpdateCCDBin(int hor, int ver) override;
 
         virtual bool StartStreaming() override;
         virtual bool StopStreaming() override;
 
-    private:
+    protected:
 
-        float CalcTimeLeft(timeval, float);
         bool SetupParms();
+
+    private:
 
         // Turns on/off Bayer RGB simulation.
         void setRGB(bool onOff);
 
-        double TemperatureRequest { 0 };
+        float CalcTimeLeft(timeval start, float req);
 
-        float ExposureRequest { 0 };
-        struct timeval ExpStart
+        SkyRenderer m_Renderer;
+
+        // Follows the client's TIME_UTC, so the rendered sky agrees with the telescope simulator's
+        SimulatorClock m_Clock;
+
+        // ADU ceiling and magnitude calibration -- updated from INDI properties.
+        int   m_MaxVal        {65000};
+        float m_LimitingMag   {11.5f};
+        float m_SaturationMag {2.0f};
+        float m_Seeing        {3.5f};
+
+        double m_TemperatureRequest { 0 };
+
+        float m_ExposureRequest { 0 };
+        struct timeval m_ExpStart
         {
             0, 0
         };
 
 
-        int testvalue { 0 };
-        bool ShowStarField { true };
-        int bias { 1500 };
-        int maxnoise { 20 };
-        int maxval { 65000 };
-        int maxpix { 0 };
-        int minpix { 65000 };
-        float skyglow { 40 };
-        float limitingmag { 11.5 };
-        float saturationmag { 2 };
-        float seeing { 3.5 };
-        float ImageScalex { 1.0 };
-        float ImageScaley { 1.0 };
+        int m_TestValue { 0 };
+        bool m_ShowStarField { true };
+        int m_Bias { 1500 };
+        int m_MaxNoise { 20 };
+        float m_SkyGlow { 40 };
         //  An oag is offset this much from center of scope position (arcminutes)
-        float OAGoffset { 0 };
-        double rotationCW { 0 };
-        float TimeFactor { 1 };
+        float m_OAGoffset { 0 };
+        float m_TimeFactor { 1 };
+        // With a rotator device "RotatorAngle" is snooped and defined, so the
+        // resulting camera rotation is the addition of offset and rotator angle.
+        // Without a rotator device ("Manual Rotator") the rotator angle is
+        // considered fixed to 0° and the camera rotation is equal to offset
+        float m_RotationOffset { 0 };
 
-        bool simulateRGB { false };
+        bool m_SimulateRGB { false };
 
-        //  our zero point calcs used for drawing stars
-        float k { 0 };
-        float z { 0 };
+        bool m_AbortPrimaryFrame { false };
 
-        bool AbortPrimaryFrame { false };
+    protected:
+        float m_GuideRate { 7 };
+        float m_GuideNSOffset {0};
+        float m_GuideWEOffset {0};
+        double m_CurrentRA { 0 };
+        double m_CurrentDEC { 0 };
 
-        /// Guide rate is 7 arcseconds per second
-        float GuideRate { 7 };
+    private:
+        float m_PEPeriod { 8 * 60 };
+        float m_PEMax { 11 };
 
-        /// Our PEPeriod is 8 minutes and we have a 22 arcsecond swing
-        float PEPeriod { 8 * 60 };
-        float PEMax { 11 };
+        // Random values added to ra and dec
+        float m_RaRand { 0 };
+        float m_DecRand { 0 };
 
-        double currentRA { 0 };
-        double currentDE { 0 };
-        bool usePE { false };
-        time_t RunStart;
+        // linear drift (multiplied by seconds since start) in arcsec/sec.
+        float m_RaTimeDrift { 0 };
+        float m_DecTimeDrift { 0 };
 
-        float guideNSOffset {0};
-        float guideWEOffset {0};
+        bool m_UsePE { false };
+#ifdef USE_EQUATORIAL_PE
+        double raPE  { 0 };
+        double decPE { 0 };
+#endif
+        time_t m_RunStart;
+        time_t m_LastSim;
+        bool m_RunStartInitialized { false };
 
-        float polarError { 0 };
-        float polarDrift { 0 };
-        float king_gamma = { 0 };
-        float king_theta = { 0 };
+        float m_PolarError { 0 };
+        float m_PolarDrift { 0 };
+        float m_KingGamma = { 0 };
+        float m_KingTheta = { 0 };
 
-        int streamPredicate;
-        pthread_t primary_thread;
-        bool terminateThread;
+        int m_StreamPredicate;
+        pthread_t m_PrimaryThread;
+        bool m_TerminateThread;
 
         //  And this lives in our simulator settings page
 
-        INumberVectorProperty SimulatorSettingsNP;
-        INumber SimulatorSettingsN[17];
+        enum
+        {
+            SIM_XRES = 0,
+            SIM_YRES,
+            SIM_XSIZE,
+            SIM_YSIZE,
+            SIM_MAXVAL,
+            SIM_BIAS,
+            SIM_SATURATION,
+            SIM_LIMITINGMAG,
+            SIM_NOISE,
+            SIM_SKYGLOW,
+            SIM_OAGOFFSET,
+            SIM_POLAR,
+            SIM_POLARDRIFT,
+            SIM_ROTATION,
+            SIM_KING_GAMMA,
+            SIM_KING_THETA,
+            SIM_TIME_FACTOR,
+            SIM_SEEING,
+            SIM_RA_DRIFT,
+            SIM_DEC_DRIFT,
+            SIM_RA_RAND,
+            SIM_DEC_RAND,
+            SIM_PE_PERIOD,
+            SIM_PE_MAX,
+            SIM_TEMPERATURE,
+            SIM_NUM_PROPERTIES
+        };
+        INDI::PropertyNumber SimulatorSettingsNP {SIM_NUM_PROPERTIES};
 
-        ISwitchVectorProperty SimulateRgbSP;
-        ISwitch SimulateRgbS[2];
 
-        INumberVectorProperty EqPENP;
-        INumber EqPEN[2];
+        INDI::PropertySwitch SimTestsSP {3};
+        enum
+        {
+            SIM_TESTS_RGB,
+            SIM_TESTS_CRASH,
+            SIM_TESTS_TIMEOUT
+        };
 
-        ISwitch CoolerS[2];
-        ISwitchVectorProperty CoolerSP;
+        INDI::PropertyNumber EqPENP {2};
+        enum
+        {
+            RA_PE,
+            DEC_PE
+        };
 
-        INumber GainN[1];
-        INumberVectorProperty GainNP;
+        INDI::PropertyNumber GainNP {1};
 
-        INDI::PropertySwitch ToggleTimeoutSP {2};
+        bool m_SimulateTimeout { false };
 
         static constexpr const char *SIMULATOR_TAB {"Simulator Settings"};
 };

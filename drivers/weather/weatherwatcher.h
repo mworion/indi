@@ -31,6 +31,19 @@
 class WeatherWatcher : public INDI::Weather
 {
     public:
+        // Enum for weather parameters
+        enum WeatherParamIndex
+        {
+            WEATHER_RAIN = 0,
+            WEATHER_TEMP = 1,
+            WEATHER_WIND = 2,
+            WEATHER_GUST = 3,
+            WEATHER_CLOUD = 4,
+            WEATHER_HUM = 5,
+            WEATHER_PRESS = 6,
+            WEATHER_FORECAST = 7
+        };
+
         WeatherWatcher();
 
         //  Generic indi device entries
@@ -39,29 +52,27 @@ class WeatherWatcher : public INDI::Weather
         const char *getDefaultName() override;
 
         virtual bool initProperties() override;
+        virtual bool updateProperties() override;
         virtual void ISGetProperties(const char *dev) override;
         virtual bool ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n) override;
+        virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
 
     protected:
         virtual IPState updateWeather() override;
         virtual bool saveConfigItems(FILE *fp) override;
 
-        IText keywordT[8] {};
-        ITextVectorProperty keywordTP;
-
-        IText separatorT[1] {};
-        ITextVectorProperty separatorTP;
+        INDI::PropertyText keywordTP {8};
+        INDI::PropertyText separatorTP {1};
+        INDI::PropertyText labelTP {8};
+        INDI::PropertySwitch criticalSP {8};
 
     private:
         std::map<std::string, std::string> createMap(std::string const &s);
         bool readWatchFile();
-        bool createPropertiesFromMap();
+        bool createProperties();
+        bool getProperties();
 
-        IText watchFileT[1] {};
-        ITextVectorProperty watchFileTP;
-
-        bool initialParse { false };
-        std::string readBuffer;
+        INDI::PropertyText watchFileTP {1};
 
         std::map<std::string, std::string> weatherMap;
 };

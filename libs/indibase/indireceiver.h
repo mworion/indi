@@ -22,10 +22,6 @@
 #include "dsp.h"
 #include <fitsio.h>
 
-#ifdef HAVE_WEBSOCKET
-#include "indiwsserver.h"
-#endif
-
 #include <fitsio.h>
 
 #include <memory>
@@ -108,6 +104,12 @@ class Receiver : public virtual SensorInterface
         void setFrequency(double freq);
 
         /**
+         * @brief setBPS Set the bits per sample.
+         * @param BPS bits per sample
+         */
+        void setBPS(int BPS);
+
+        /**
          * @brief getBandwidth Get requested integration bandwidth for the sensor in Hz.
          * @return requested integration bandwidth for the sensor in Hz.
          */
@@ -160,7 +162,7 @@ class Receiver : public virtual SensorInterface
         }
 
         /**
-         * @brief SetReceiverCapability Set the Receiver capabilities. Al fields must be initilized.
+         * @brief SetReceiverCapability Set the Receiver capabilities. Al fields must be initialized.
          * @param cap pointer to ReceiverCapability struct.
          */
         void SetReceiverCapability(uint32_t cap);
@@ -191,6 +193,7 @@ class Receiver : public virtual SensorInterface
         INumber ReceiverSettingsN[7];
 
     private:
+        int BitsPerSample;
         double Frequency;
         double SampleRate;
         double Bandwidth;

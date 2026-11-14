@@ -22,10 +22,6 @@
 #include "dsp.h"
 #include <fitsio.h>
 
-#ifdef HAVE_WEBSOCKET
-#include "indiwsserver.h"
-#endif
-
 #include <fitsio.h>
 
 #include <memory>
@@ -145,7 +141,7 @@ class Spectrograph : public virtual SensorInterface
         }
 
         /**
-         * @brief SetSpectrographCapability Set the Spectrograph capabilities. Al fields must be initilized.
+         * @brief SetSpectrographCapability Set the Spectrograph capabilities. Al fields must be initialized.
          * @param cap pointer to SpectrographCapability struct.
          */
         void SetSpectrographCapability(uint32_t cap);

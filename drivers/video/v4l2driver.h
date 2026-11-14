@@ -45,6 +45,19 @@ typedef unsigned long ulong;
 
 class Lx;
 
+// Pixel size info for different cameras
+typedef struct PixelSizeInfo
+{
+    const char * deviceLabel; // Device label used by INDI
+    const char * deviceName; // device name reported by V4L
+    const char * commonName; // if null, use device name
+    float pixelSizeX;
+    float pixelSizeY; // if negative, use pixelSizeX also for Y
+    uint32_t width;     // Default width, if 0 then don't set anything
+    uint32_t height;    // Default height, if 0 then don't set anything
+    bool tested; //if False print please report message
+} PixelSizeInfo;
+
 class V4L2_Driver : public INDI::CCD
 {
 public:
@@ -81,6 +94,8 @@ public:
         virtual bool StartStreaming() override;
         virtual bool StopStreaming() override;
 
+        bool updateCaptureSize(uint32_t width, uint32_t height);
+
         /* Structs */
         typedef struct
         {
@@ -116,7 +131,6 @@ public:
         /* Switches */
 
         ISwitch ImageDepthS[2];
-        ISwitch StackModeS[5];
         ISwitch ColorProcessingS[3];
 
         /* Texts */
@@ -131,7 +145,7 @@ public:
 
         /* Switch vectors */
         ISwitchVectorProperty ImageDepthSP;     /* 8 bits or 16 bits switch */
-        ISwitchVectorProperty StackModeSP;      /* StackMode switch */
+        INDI::PropertySwitch  StackModeSP {5};  /* StackMode switch */
         ISwitchVectorProperty InputsSP;         /* Select input switch */
         ISwitchVectorProperty CaptureFormatsSP; /* Select Capture format switch */
         ISwitchVectorProperty CaptureSizesSP;   /* Select Capture size switch (Discrete)*/
@@ -158,7 +172,7 @@ public:
         INumber *AbsExposureN;
         ISwitchVectorProperty *ManualExposureSP;
 
-        /* Initilization functions */
+        /* Initialization functions */
         //virtual void connectCamera();
         virtual void getBasicData();
         bool getPixelFormat(uint32_t v4l2format, INDI_PIXEL_FORMAT &pixelFormat, uint8_t &pixelDepth);
@@ -172,12 +186,17 @@ public:
         bool startlongexposure(double timeinsec);
         static void lxtimerCallback(void *userpointer);
         static void stdtimerCallback(void *userpointer);
+        void iOptronWatchdogCallback();
 
         /* start/stop functions */
         bool start_capturing(bool do_stream);
         bool stop_capturing();
 
         virtual void updateV4L2Controls();
+
+        bool isIOptron();
+
+        void resetDevice(int bus_num, int dev_num);
 
         /* Variables */
         INDI::V4L2_Base *v4l_base;
@@ -202,19 +221,22 @@ public:
         struct timeval getElapsedExposure() const;
         float getRemainingExposure() const;
 
-        unsigned int stackMode;
+        unsigned int m_StackMode;
         ulong frameBytes;
         unsigned int non_capture_frames;
         bool v4l_capture_started;
         bool is_capturing;
         bool is_exposing;
+        bool valid_frame_has_arrived;
 
         //Long Exposure
         Lx *lx;
         int lxtimer;
         int stdtimer;
+        INDI::Timer ioptron_watchdog_timer;
 
         short lxstate;
+        PixelSizeInfo * m_Info {nullptr};
 
         char defaultVideoPort[256] = {"/dev/video0"};
         char configPort[256] = {0};

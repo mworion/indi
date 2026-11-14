@@ -26,13 +26,19 @@
 
 #include "openweathermap.h"
 
-#include "json.h"
+#ifdef _USE_SYSTEM_JSONLIB
+#include <nlohmann/json.hpp>
+#else
+#include <indijson.hpp>
+#endif
+
 #include "locale_compat.h"
 
 #include <curl/curl.h>
 
 #include <memory>
 #include <cstring>
+#include <limits> // Needed for std::numeric_limits
 
 using json = nlohmann::json;
 
@@ -51,6 +57,7 @@ OpenWeatherMap::OpenWeatherMap()
 
     owmLat  = std::numeric_limits<double>::quiet_NaN();
     owmLong = std::numeric_limits<double>::quiet_NaN();
+    previousForecast = std::numeric_limits<double>::quiet_NaN(); // Initialize previous forecast
 
     setWeatherConnection(CONNECTION_NONE);
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -69,12 +76,12 @@ const char *OpenWeatherMap::getDefaultName()
 void OpenWeatherMap::ISGetProperties(const char *dev)
 {
     INDI::Weather::ISGetProperties(dev);
-    defineProperty(&owmAPIKeyTP);
+    defineProperty(owmAPIKeyTP);
 }
 
 bool OpenWeatherMap::Connect()
 {
-    if (owmAPIKeyTP[0].getText() == nullptr)
+    if (owmAPIKeyTP[0].isEmpty())
     {
         LOG_ERROR("OpenWeatherMap API Key is not available. Please register your API key at "
                   "www.openweathermap.org and save it under Options.");
@@ -114,8 +121,8 @@ bool OpenWeatherMap::initProperties()
     setCriticalParameter("WEATHER_RAIN_HOUR");
     setCriticalParameter("WEATHER_SNOW_HOUR");
 
+    updateLocation(LocationNP[LOCATION_LATITUDE].getValue(), LocationNP[LOCATION_LONGITUDE].getValue(), LocationNP[LOCATION_ELEVATION].getValue());
     addDebugControl();
-
     return true;
 }
 
@@ -196,12 +203,15 @@ IPState OpenWeatherMap::updateWeather()
     double snow = 0;
     double clouds = 0;
     int code = 0;
-
-    json weatherReport = json::parse(readBuffer);
+    std::string description; // To store weather description
 
     try
     {
+        json weatherReport = json::parse(readBuffer);
+
         weatherReport["weather"][0]["id"].get_to(code);
+        weatherReport["weather"][0]["description"].get_to(description); // Get description
+
         if (code >= 200 && code < 300)
         {
             // Thunderstorm
@@ -248,15 +258,30 @@ IPState OpenWeatherMap::updateWeather()
         weatherReport["wind"]["speed"].get_to(wind);
         // Cloud
         weatherReport["clouds"]["all"].get_to(clouds);
-        try
+        // Rain (does not exist in all reports)
+        if (weatherReport.contains("rain"))
         {
-            // Rain
-            weatherReport["rain"]["h"].get_to(rain);
-            // Snow
-            weatherReport["snow"]["h"].get_to(snow);
+            if (weatherReport["rain"].contains("h"))
+            {
+                weatherReport["rain"]["h"].get_to(rain);
+            }
+            else if (weatherReport["rain"].contains("1h"))
+            {
+                weatherReport["rain"]["1h"].get_to(rain);
+            }
         }
-        // Ignore error since these values do not exist in all reports.
-        catch (json::exception &e) {}
+        // Snow (does not exist in all reports)
+        if (weatherReport.contains("snow"))
+        {
+            if (weatherReport["snow"].contains("h"))
+            {
+                weatherReport["snow"]["h"].get_to(snow);
+            }
+            else if (weatherReport["snow"].contains("1h"))
+            {
+                weatherReport["snow"]["1h"].get_to(snow);
+            }
+        }
 
     }
     catch (json::exception &e)
@@ -264,6 +289,13 @@ IPState OpenWeatherMap::updateWeather()
         // output exception information
         LOGF_ERROR("Error parsing weather report %s id: %d", e.what(), e.id);
         return IPS_ALERT;
+    }
+
+    // Log forecast change if it differs from the previous value
+    if (std::isnan(previousForecast) || forecast != previousForecast)
+    {
+        LOGF_INFO("Forecast changed: %s (Code: %d)", description.c_str(), code);
+        previousForecast = forecast; // Update previous forecast
     }
 
     setParameterValue("WEATHER_FORECAST", forecast);
@@ -282,7 +314,7 @@ bool OpenWeatherMap::saveConfigItems(FILE *fp)
 {
     INDI::Weather::saveConfigItems(fp);
 
-    IUSaveConfigText(fp, &owmAPIKeyTP);
+    owmAPIKeyTP.save(fp);
 
     return true;
 }

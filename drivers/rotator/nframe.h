@@ -60,8 +60,7 @@ class nFrameRotator : public INDI::Rotator
 
         // GeneN hack
         // Rotator Speed (if variable speeds are supported)
-        INumberVectorProperty RotatorSpeedNP;
-        INumber RotatorSpeedN[1];
+        INDI::PropertyNumber RotatorSpeedNP {1};
 
 
         INumberVectorProperty RotateMaxPosNP;
@@ -97,13 +96,11 @@ class nFrameRotator : public INDI::Rotator
         ///////////////////////////////////////////////////////////////////////////////
 
         // Settings
-        INumberVectorProperty SettingNP;
-        INumber SettingN[1];
+        INDI::PropertyNumber SettingNP {1};
         enum { PARAM_STEPS_DEGREE };
 
         // Rotator Steps
-        INumber RotatorAbsPosN[1];
-        INumberVectorProperty RotatorAbsPosNP;
+        INDI::PropertyNumber RotatorAbsPosNP {1};
 
 
         ///////////////////////////////////////////////////////////////////////
@@ -120,15 +117,14 @@ class nFrameRotator : public INDI::Rotator
         static const char DRIVER_STOP_CHAR { 0x23 };
         // Wait up to a maximum of 3 seconds for serial input
         static constexpr const uint8_t DRIVER_TIMEOUT {3};
-        // Maximum buffer for sending/receving.
+        // Maximum buffer for sending/receiving.
         static constexpr const uint8_t DRIVER_LEN {128};
         // Operatives
         static constexpr const uint8_t DRIVER_OPERATIVES {2};
         // Models
         static constexpr const uint8_t DRIVER_MODELS {4};
 
-        ISwitch SteppingModeS[3];
-        ISwitchVectorProperty SteppingModeSP;
+        INDI::PropertySwitch SteppingModeSP {3};
         enum
         {
             STEPPING_WAVE,
@@ -136,19 +132,16 @@ class nFrameRotator : public INDI::Rotator
             STEPPING_FULL,
         };
 
-        ISwitch CoilStatusS[2];
-        ISwitchVectorProperty CoilStatusSP;
+        INDI::PropertySwitch CoilStatusSP {2};
         enum
         {
             COIL_ENERGIZED_OFF,
             COIL_ENERGIZED_ON,
         };
 
-        INumber SteppingPhaseN[1];
-        INumberVectorProperty SteppingPhaseNP;
+        INDI::PropertyNumber SteppingPhaseNP{3};
 
-        INumber MaxSpeedN[1];
-        INumberVectorProperty MaxSpeedNP;
+        INDI::PropertyNumber MaxSpeedNP {1};
 
         bool readPosition();
         bool readCompensationInfo();
@@ -173,7 +166,7 @@ class nFrameRotator : public INDI::Rotator
         static const char NFRAME_STOP_CHAR { 0x23 };
         // Wait up to a maximum of 3 seconds for serial input
         static constexpr const uint8_t NFRAME_TIMEOUT {3};
-        // Maximum buffer for sending/receving.
+        // Maximum buffer for sending/receiving.
         static constexpr const uint8_t NFRAME_LEN {64};
 
 

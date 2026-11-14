@@ -48,6 +48,8 @@ class EFA : public INDI::Focuser
             MTR_GOTO_OVER = 0x13,
             MTR_SLEWLIMITMAX = 0x1B,
             MTR_SLEWLIMITGETMAX = 0x1D,
+            // Not a speed setting: these MOVE the motor positive/negative at speed 0x00 (stop) to 0x09
+            // until the slew limit is reached (PlaneWave EFA protocol). Never send them to query anything.
             MTR_PMSLEW_RATE = 0x24,
             MTR_NMSLEW_RATE = 0x25,
             TEMP_GET = 0x26,
@@ -93,17 +95,20 @@ class EFA : public INDI::Focuser
         bool readFanState();
         bool readCalibrationState();
         bool readMaxSlewLimit();
+        bool readApproachDirection();
+        bool readStopDetect();
 
         ///////////////////////////////////////////////////////////////////////////////////
         /// Set functions
         ///////////////////////////////////////////////////////////////////////////////////
         bool setFanEnabled(bool enabled);
         bool setCalibrationEnabled(bool enabled);
+        bool setApproachDirection(uint8_t direction);
+        bool setStopDetect(bool enabled);
 
         ///////////////////////////////////////////////////////////////////////////////
         /// Communication Functions
         ///////////////////////////////////////////////////////////////////////////////
-        //bool readResponse(uint8_t * res, uint32_t res_len, int *nbytes_read);
         int readByte(int fd, uint8_t *buf, int timeout, int *nbytes_read);
         int readBytes(int fd, uint8_t *buf, int nbytes, int timeout, int *nbytes_read);
         int writeBytes(int fd, const uint8_t *buf, int nbytes, int *nbytes_written);
@@ -125,18 +130,15 @@ class EFA : public INDI::Focuser
         /// Properties
         ///////////////////////////////////////////////////////////////////////////////////
 
-        // Focuser Informatin
-        ITextVectorProperty InfoTP;
-        IText InfoT[1] {};
+        // Focuser Information
+        INDI::PropertyText InfoTP {1};
         enum
         {
             INFO_VERSION
         };
 
-
         // FAN State
-        ISwitchVectorProperty FanStateSP;
-        ISwitch FanStateS[2];
+        INDI::PropertySwitch FanStateSP {2};
         enum
         {
             FAN_ON,
@@ -144,8 +146,7 @@ class EFA : public INDI::Focuser
         };
 
         // Fan Control Mode
-        ISwitchVectorProperty FanControlSP;
-        ISwitch FanControlS[3];
+        INDI::PropertySwitch FanControlSP {3};
         enum
         {
             FAN_MANUAL,
@@ -154,8 +155,7 @@ class EFA : public INDI::Focuser
         };
 
         // Fan Control Parameters
-        INumberVectorProperty FanControlNP;
-        INumber FanControlN[3];
+        INDI::PropertyNumber FanControlNP {3};
         enum
         {
             FAN_MAX_ABSOLUTE,
@@ -164,25 +164,38 @@ class EFA : public INDI::Focuser
         };
 
         // Fan Off on Disconnect
-        ISwitchVectorProperty FanDisconnectSP;
-        ISwitch FanDisconnectS[1];
+        INDI::PropertySwitch FanDisconnectSP {1};
         enum
         {
             FAN_OFF_ON_DISCONNECT
         };
 
         // Calibration State
-        ISwitchVectorProperty CalibrationStateSP;
-        ISwitch CalibrationStateS[2];
+        INDI::PropertySwitch CalibrationStateSP {2};
         enum
         {
             CALIBRATION_ON,
             CALIBRATION_OFF
         };
 
+        // Approach Direction for consistent backlash compensation
+        INDI::PropertySwitch ApproachDirectionSP {2};
+        enum
+        {
+            APPROACH_POSITIVE,
+            APPROACH_NEGATIVE
+        };
+
+        // Stop Detection (end-of-travel limit switch detection)
+        INDI::PropertySwitch StopDetectSP {2};
+        enum
+        {
+            STOP_DETECT_ON,
+            STOP_DETECT_OFF
+        };
+
         // Read Only Temperature Reporting
-        INumberVectorProperty TemperatureNP;
-        INumber TemperatureN[2];
+        INDI::PropertyNumber TemperatureNP {2};
         enum
         {
             TEMPERATURE_PRIMARY,
@@ -192,7 +205,7 @@ class EFA : public INDI::Focuser
         /////////////////////////////////////////////////////////////////////////////
         /// Private variables
         /////////////////////////////////////////////////////////////////////////////
-        double m_LastTemperature[2];
+        double m_LastTemperature[2] {0, 0};
         double m_LastPosition {0};
 
         bool IN_TIMER = false;
@@ -204,6 +217,8 @@ class EFA : public INDI::Focuser
         static const uint8_t DRIVER_SOM { 0x3B };
         // Temperature Reporting threshold
         static constexpr double TEMPERATURE_THRESHOLD { 0.05 };
+        // Invalid temperature sentinel value returned by hardware (0x7F, 0x7F)
+        static constexpr double TEMPERATURE_INVALID { -100.0 };
 
         static constexpr const uint8_t DRIVER_LEN {9};
         // Wait up to a maximum of 3 seconds for serial input

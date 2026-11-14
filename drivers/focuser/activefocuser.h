@@ -20,7 +20,13 @@
 #include <cstring>
 #include <sstream>
 #include <unistd.h>
-#include "hidapi.h"
+
+#ifdef _USE_SYSTEM_HIDAPILIB
+#include <hidapi/hidapi.h>
+#else
+#include <indi_hidapi.h>
+#endif
+
 #include "indifocuser.h"
 
 class ActiveFocuser : public INDI::Focuser
@@ -65,27 +71,27 @@ class ActiveFocuser : public INDI::Focuser
         // double initTicks{0}; // #PS: unused
 
         // Hardware version display
-        ITextVectorProperty HardwareVersionNP;
-        IText HardwareVersionN[1];
+        INDI::PropertyText HardwareVersionNP {1};
 
         // Software version display
-        ITextVectorProperty SoftwareVersionNP;
-        IText SoftwareVersionN[1];
+        INDI::PropertyText SoftwareVersionNP {1};
 
         // Air Temperature in celsius degrees
-        INumberVectorProperty AirTemperatureNP;
-        INumber AirTemperatureN[1];
+        INDI::PropertyNumber AirTemperatureNP {1};
 
         // Mirror Temperature in celsius degrees
-        INumberVectorProperty MirrorTemperatureNP;
-        INumber MirrorTemperatureN[1];
+        INDI::PropertyNumber MirrorTemperatureNP {1};
 
         // Tube Temperature in celsius degrees
-        INumberVectorProperty TubeTemperatureNP;
-        INumber TubeTemperatureN[1];
+        INDI::PropertyNumber TubeTemperatureNP {1};
 
         // Fan State switch
-        ISwitch FanS[2];
-        ISwitchVectorProperty FanSP;
+        INDI::PropertySwitch FanSP {2};
+        enum
+        {
+            FAN_ON,
+            FAN_OFF,
+        };
+
 
 };

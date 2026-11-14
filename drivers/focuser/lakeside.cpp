@@ -98,15 +98,15 @@ bool Lakeside::initProperties()
     // Backlash 0-255
     //    IUFillNumber(&FocusBacklashN[0], "BACKLASH", "(0-255)", "%.f", 0, 255, 0, 0);
     //    IUFillNumberVector(&FocusBacklashNP, FocusBacklashN, 1, getDeviceName(), "BACKLASH", "Backlash", SETTINGS_TAB, IP_RW, 0, IPS_IDLE );
-    FocusBacklashN[0].min = 0;
-    FocusBacklashN[0].max = 255;
-    FocusBacklashN[0].step = 10;
-    FocusBacklashN[0].value = 0;
+    FocusBacklashNP[0].setMin(0);
+    FocusBacklashNP[0].setMax(255);
+    FocusBacklashNP[0].setStep(10);
+    FocusBacklashNP[0].setValue(0);
 
     // Maximum Travel - read only
     //    IUFillNumber(&MaxTravelN[0], "MAXTRAVEL", "No. Steps", "%.f", 1, 65536, 0, 10000);
     //    IUFillNumberVector(&MaxTravelNP, MaxTravelN, 1, getDeviceName(), "MAXTRAVEL", "Max travel(Via Ctrlr)", SETTINGS_TAB, IP_RO, 0, IPS_IDLE );
-    FocusMaxPosNP.p = IP_RO;
+    FocusMaxPosNP.setPermission(IP_RO);
 
     // Step Size - read only
     IUFillNumber(&StepSizeN[0], "STEPSIZE", "No. Steps", "%.f", 1, 65536, 0, 1);
@@ -161,10 +161,10 @@ bool Lakeside::initProperties()
     IUFillNumberVector(&Slope2PeriodNP, Slope2PeriodN, 1, getDeviceName(), "SLOPE2PERIOD", "Slope 2 Period", SETTINGS_TAB,
                        IP_RW, 0, IPS_IDLE );
 
-    FocusAbsPosN[0].min = 0.;
+    FocusAbsPosNP[0].setMin(0.);
 
     // shephpj - not used
-    //FocusAbsPosN[0].max = 65536.;
+    //FocusAbsPosNP[0].setMax(65536.);
 
     setDefaultPollingPeriod(1000);
 
@@ -385,7 +385,7 @@ bool Lakeside::LakesideOnline()
 // 1 = Reversed
 bool Lakeside::updateMoveDirection()
 {
-    int rc = -1, temp = -1;
+    int temp = -1;
     char resp[LAKESIDE_LEN] = {0};
     char cmd[] = "?D#";
 
@@ -403,16 +403,16 @@ bool Lakeside::updateMoveDirection()
 
     // direction is in form Dnnnnn#
     // where nnnnn is 0 for normal or 1 for reversed
-    rc = sscanf(resp, "D%5d#", &temp);
+    sscanf(resp, "D%5d#", &temp);
 
     if ( temp == 0)
     {
-        FocusReverseS[INDI_DISABLED].s = ISS_ON;
+        FocusReverseSP[INDI_DISABLED].setState(ISS_ON);
         LOGF_DEBUG("updateMoveDirection: Move Direction is (%d)", temp);
     }
     else if ( temp == 1)
     {
-        FocusReverseS[INDI_ENABLED].s = ISS_ON;
+        FocusReverseSP[INDI_ENABLED].setState(ISS_ON);
         LOGF_DEBUG("updateMoveDirection: Move Direction is (%d)", temp);
     }
     else
@@ -426,12 +426,12 @@ bool Lakeside::updateMoveDirection()
 
 // Decode contents of buffer
 // Returns:
-//          P : Position update found - FocusAbsPosN[0].value updated
+//          P : Position update found - FocusAbsPosNP[0].getValue() updated
 //          T : Temperature update found - TemperatureN[0].value
 //          K : Temperature in Kelvin update found - TemperatureKN[0].value
 //          D : DONE# received
 //          O : OK# received
-//          E : Error due to unknown/misformed command having been sent
+//          E : Error due to unknown/malformed command having been sent
 //          ? : unknown response received
 char Lakeside::DecodeBuffer(char * in_response)
 {
@@ -451,7 +451,7 @@ char Lakeside::DecodeBuffer(char * in_response)
         return 'O';
     }
 
-    // if focuser returns an error for unknow command
+    // if focuser returns an error for unknown command
     if (!strncmp(in_response, "!#", 2))
     {
         return 'E';
@@ -492,8 +492,8 @@ char Lakeside::DecodeBuffer(char * in_response)
     // focuser position returned Pnnnnn#
     if (rc > 0)
     {
-        FocusAbsPosN[0].value = pos;
-        IDSetNumber(&FocusAbsPosNP, nullptr);
+        FocusAbsPosNP[0].setValue(pos);
+        FocusAbsPosNP.apply();
 
         LOGF_DEBUG("DecodeBuffer: Returned position (%d)", pos);
         return 'P';
@@ -623,7 +623,7 @@ bool Lakeside::updatePosition()
 // Get Backlash compensation
 bool Lakeside::updateBacklash()
 {
-    int rc = -1, temp = -1;
+    int temp = -1;
     char resp[LAKESIDE_LEN] = {0};
     char cmd[] = "?B#";
 
@@ -639,11 +639,11 @@ bool Lakeside::updateBacklash()
 
     // Backlash is in form Bnnnnn#
     // where nnnnn is 0 - 255, space left padded
-    rc = sscanf(resp, "B%5d#", &temp);
+    sscanf(resp, "B%5d#", &temp);
 
     if ( temp >= 0)
     {
-        FocusBacklashN[0].value = temp;
+        FocusBacklashNP[0].setValue(temp);
         LOGF_DEBUG("updateBacklash: Backlash is (%d)", temp);
     }
     else
@@ -658,7 +658,7 @@ bool Lakeside::updateBacklash()
 // get Slope 1 Increments
 bool Lakeside::updateSlope1Inc()
 {
-    int rc = -1, temp = -1;
+    int temp = -1;
     char resp[LAKESIDE_LEN];
     char cmd[] = "?1#";
 
@@ -674,7 +674,7 @@ bool Lakeside::updateSlope1Inc()
 
     // Slope 1 Increment is in form 1nnnnn#
     // where nnnnn is number of 0.1 step increments, space left padded
-    rc = sscanf(resp, "1%5d#", &temp);
+    sscanf(resp, "1%5d#", &temp);
 
     if ( temp >= 0)
     {
@@ -693,7 +693,7 @@ bool Lakeside::updateSlope1Inc()
 // get Slope 2 Increments
 bool Lakeside::updateSlope2Inc()
 {
-    int rc = -1, temp = -1;
+    int temp = -1;
     char resp[LAKESIDE_LEN] = {0};
     char cmd[] = "?2#";
 
@@ -709,7 +709,7 @@ bool Lakeside::updateSlope2Inc()
 
     // Slope 1 Increment is in form 1nnnnn#
     // where nnnnn is number of 0.1 step increments, space left padded
-    rc = sscanf(resp, "2%5d#", &temp);
+    sscanf(resp, "2%5d#", &temp);
 
     if ( temp >= 0)
     {
@@ -728,7 +728,7 @@ bool Lakeside::updateSlope2Inc()
 // get Slope 1 direction : 0 or 1
 bool Lakeside::updateSlope1Dir()
 {
-    int rc = -1, temp = -1;
+    int temp = -1;
     char resp[LAKESIDE_LEN] = {0};
     char cmd[] = "?a#";
 
@@ -744,7 +744,7 @@ bool Lakeside::updateSlope1Dir()
 
     // Slope 1 Direction is in form annnnn#
     // where nnnnn is either 0 or 1, space left padded
-    rc = sscanf(resp, "a%5d#", &temp);
+    sscanf(resp, "a%5d#", &temp);
 
     if ( temp == 0)
     {
@@ -767,7 +767,7 @@ bool Lakeside::updateSlope1Dir()
 // get Slope 2 direction : 0 or 1
 bool Lakeside::updateSlope2Dir()
 {
-    int rc = -1, temp = -1;
+    int temp = -1;
     char resp[LAKESIDE_LEN] = {0};
     char cmd[] = "?b#";
 
@@ -783,7 +783,7 @@ bool Lakeside::updateSlope2Dir()
 
     // Slope 2 Direction is in form annnnn#
     // where nnnnn is either 0 or 1, space left padded
-    rc = sscanf(resp, "b%5d#", &temp);
+    sscanf(resp, "b%5d#", &temp);
 
     if ( temp == 0)
     {
@@ -806,7 +806,7 @@ bool Lakeside::updateSlope2Dir()
 // Get slope 1 deadband
 bool Lakeside::updateSlope1Deadband()
 {
-    int rc = -1, temp = -1;
+    int temp = -1;
     char resp[LAKESIDE_LEN] = {0};
     char cmd[] = "?c#";
 
@@ -822,7 +822,7 @@ bool Lakeside::updateSlope1Deadband()
 
     // Deadband is in form cnnnnn#
     // where nnnnn is 0 - 255, space left padded
-    rc = sscanf(resp, "c%5d#", &temp);
+    sscanf(resp, "c%5d#", &temp);
 
     if ( temp >= 0)
     {
@@ -841,7 +841,7 @@ bool Lakeside::updateSlope1Deadband()
 // Get slope 2 deadband
 bool Lakeside::updateSlope2Deadband()
 {
-    int rc = -1, temp = -1;
+    int temp = -1;
     char resp[LAKESIDE_LEN] = {0};
     char cmd[] = "?d#";
 
@@ -857,7 +857,7 @@ bool Lakeside::updateSlope2Deadband()
 
     // Deadband is in form dnnnnn#
     // where nnnnn is 0 - 255, space left padded
-    rc = sscanf(resp, "d%5d#", &temp);
+    sscanf(resp, "d%5d#", &temp);
 
     if ( temp >= 0)
     {
@@ -876,7 +876,7 @@ bool Lakeside::updateSlope2Deadband()
 // get Slope 1 time period
 bool Lakeside::updateSlope1Period()
 {
-    int rc = -1, temp = -1;
+    int temp = -1;
     char resp[LAKESIDE_LEN] = {0};
     char cmd[] = "?e#";
 
@@ -892,7 +892,7 @@ bool Lakeside::updateSlope1Period()
 
     // Slope 1 Period is in form ennnnn#
     // where nnnnn is number of 0.1 step increments, space left padded
-    rc = sscanf(resp, "e%5d#", &temp);
+    sscanf(resp, "e%5d#", &temp);
 
     if ( temp >= 0)
     {
@@ -911,7 +911,7 @@ bool Lakeside::updateSlope1Period()
 // get Slope 2 time period
 bool Lakeside::updateSlope2Period()
 {
-    int rc = -1, temp = -1;
+    int temp = -1;
     char resp[LAKESIDE_LEN] = {0};
     char cmd[] = "?f#";
 
@@ -927,7 +927,7 @@ bool Lakeside::updateSlope2Period()
 
     // Slope 2 Period is in form ennnnn#
     // where nnnnn is number of 0.1 step increments, space left padded
-    rc = sscanf(resp, "f%5d#", &temp);
+    sscanf(resp, "f%5d#", &temp);
 
     if ( temp >= 0)
     {
@@ -946,7 +946,7 @@ bool Lakeside::updateSlope2Period()
 // Get Max travel
 bool Lakeside::updateMaxTravel()
 {
-    int rc = -1, temp = -1;
+    int temp = -1;
     char resp[LAKESIDE_LEN] = {0};
     char cmd[] = "?I#";
 
@@ -962,11 +962,11 @@ bool Lakeside::updateMaxTravel()
 
     // MaxTravel is in form Innnnn#
     // where nnnnn is 0 - 65536, space left padded
-    rc = sscanf(resp, "I%5d#", &temp);
+    sscanf(resp, "I%5d#", &temp);
 
     if ( temp > 0)
     {
-        FocusMaxPosN[0].value = temp;
+        FocusMaxPosNP[0].setValue(temp);
         LOGF_DEBUG("updateMaxTravel: MaxTravel is (%d)", temp);
     }
     else
@@ -981,7 +981,7 @@ bool Lakeside::updateMaxTravel()
 // get step size
 bool Lakeside::updateStepSize()
 {
-    int rc = -1, temp = -1;
+    int temp = -1;
     char resp[LAKESIDE_LEN] = {0};
     char cmd[] = "?S#";
 
@@ -999,7 +999,7 @@ bool Lakeside::updateStepSize()
 
     // StepSize is in form Snnnnn#
     // where nnnnn is 0 - ??, space left padded
-    rc = sscanf(resp, "S%5d#", &temp);
+    sscanf(resp, "S%5d#", &temp);
 
     if ( temp > 0)
     {
@@ -1032,21 +1032,21 @@ bool Lakeside::gotoPosition(uint32_t position)
     // Lakeside only uses move NNNNN steps - goto step not available.
     // calculate as steps to move = current position - new position
     // if -ve then move out, else +ve moves in
-    calc_steps = FocusAbsPosN[0].value - position;
+    calc_steps = FocusAbsPosNP[0].getValue() - position;
 
     // MaxTravelN[0].value is set by "calibrate" via the control box, & read at connect
-    if ( position > FocusMaxPosN[0].value )
+    if ( position > FocusMaxPosNP[0].getValue() )
     {
-        LOGF_ERROR("Position requested (%ld) is out of bounds between %g and %g", position, FocusAbsPosN[0].min,
-                   FocusMaxPosN[0].value);
-        FocusAbsPosNP.s = IPS_ALERT;
+        LOGF_ERROR("Position requested (%ld) is out of bounds between %g and %g", position, FocusAbsPosNP[0].getMin(),
+                   FocusMaxPosNP[0].getValue());
+        FocusAbsPosNP.setState(IPS_ALERT);
         return false;
     }
 
     // -ve == Move Out
     if ( calc_steps < 0 )
     {
-        sprintf(cmd, "CO%d#", abs(calc_steps));
+        snprintf(cmd, LAKESIDE_LEN,  "CO%d#", abs(calc_steps));
         LOGF_DEBUG("MoveFocuser: move-out cmd to send (%s)", cmd);
     }
     else
@@ -1054,14 +1054,14 @@ bool Lakeside::gotoPosition(uint32_t position)
         if ( calc_steps > 0 )
         {
             // Move in nnnnn steps = CInnnnn#
-            sprintf(cmd, "CI%d#", calc_steps);
+            snprintf(cmd, LAKESIDE_LEN,  "CI%d#", calc_steps);
             LOGF_DEBUG("MoveFocuser: move-in cmd to send (%s)", cmd);
         }
         else
         {
             // Zero == no steps to move
             LOGF_DEBUG("MoveFocuser: No steps to move. calc_steps = %d", calc_steps);
-            FocusAbsPosNP.s = IPS_OK;
+            FocusAbsPosNP.setState(IPS_OK);
             return false;
         }
 
@@ -1070,20 +1070,26 @@ bool Lakeside::gotoPosition(uint32_t position)
 
     if (!SendCmd(cmd))
     {
-        FocusAbsPosNP.s = IPS_ALERT;
+        FocusAbsPosNP.setState(IPS_ALERT);
         return false;
     }
     else
         LOGF_DEBUG("MoveFocuser: Sent cmd (%s)", cmd);
 
     // At this point, the move command has been sent, so set BUSY & return true
-    FocusAbsPosNP.s = IPS_BUSY;
+    FocusAbsPosNP.setState(IPS_BUSY);
     return true;
 }
 
 bool Lakeside::SetFocuserBacklash(int32_t steps)
 {
     return setBacklash(steps);
+}
+
+bool Lakeside::SetFocuserBacklashEnabled(bool enabled)
+{
+    INDI_UNUSED(enabled);
+    return true;
 }
 
 //
@@ -1097,7 +1103,7 @@ bool Lakeside::setBacklash(int backlash )
     tcflush(PortFD, TCIOFLUSH);
 
     //CRBnnn#
-    sprintf(cmd, "CRB%d#", backlash);
+    snprintf(cmd, LAKESIDE_LEN, "CRB%d#", backlash);
 
     if (!SendCmd(cmd))
     {
@@ -1134,7 +1140,7 @@ bool Lakeside::setStepSize(int stepsize )
     tcflush(PortFD, TCIOFLUSH);
 
     // CRSnnnnn#
-    sprintf(cmd, "CRS%d#", stepsize);
+    snprintf(cmd, LAKESIDE_LEN,  "CRS%d#", stepsize);
 
     if (!SendCmd(cmd))
     {
@@ -1271,7 +1277,7 @@ bool Lakeside::setActiveTemperatureSlope(uint32_t active_slope)
     // CRg1# : Slope 1
     // CRg2# : Slope 2
 
-    sprintf(cmd, "CRg%d#", active_slope);
+    snprintf(cmd, LAKESIDE_LEN,  "CRg%d#", active_slope);
 
     if (!SendCmd(cmd))
     {
@@ -1310,7 +1316,7 @@ bool Lakeside::setSlope1Inc(uint32_t slope1_inc)
     tcflush(PortFD, TCIOFLUSH);
 
     //CR1nnn#
-    sprintf(cmd, "CR1%d#", slope1_inc);
+    snprintf(cmd, LAKESIDE_LEN,  "CR1%d#", slope1_inc);
 
     if (!SendCmd(cmd))
     {
@@ -1346,7 +1352,7 @@ bool Lakeside::setSlope2Inc(uint32_t slope2_inc)
     tcflush(PortFD, TCIOFLUSH);
 
     //CR2nnn#
-    sprintf(cmd, "CR2%d#", slope2_inc);
+    snprintf(cmd, LAKESIDE_LEN,  "CR2%d#", slope2_inc);
 
     if (!SendCmd(cmd))
     {
@@ -1382,7 +1388,7 @@ bool Lakeside::setSlope1Dir(uint32_t slope1_direction)
     tcflush(PortFD, TCIOFLUSH);
 
     //CRannn#
-    sprintf(cmd, "CRa%d#", slope1_direction);
+    snprintf(cmd, LAKESIDE_LEN,  "CRa%d#", slope1_direction);
 
     if (!SendCmd(cmd))
     {
@@ -1418,7 +1424,7 @@ bool Lakeside::setSlope2Dir(uint32_t slope2_direction)
     tcflush(PortFD, TCIOFLUSH);
 
     //CRannn#
-    sprintf(cmd, "CRb%d#", slope2_direction);
+    snprintf(cmd, LAKESIDE_LEN,  "CRb%d#", slope2_direction);
 
     if (!SendCmd(cmd))
     {
@@ -1454,7 +1460,7 @@ bool Lakeside::setSlope1Deadband(uint32_t slope1_deadband)
     tcflush(PortFD, TCIOFLUSH);
 
     //CRcnnn#
-    sprintf(cmd, "CRc%d#", slope1_deadband);
+    snprintf(cmd, LAKESIDE_LEN,  "CRc%d#", slope1_deadband);
 
     if (!SendCmd(cmd))
     {
@@ -1490,7 +1496,7 @@ bool Lakeside::setSlope2Deadband(uint32_t slope2_deadband)
     tcflush(PortFD, TCIOFLUSH);
 
     //CRdnnn#
-    sprintf(cmd, "CRd%d#", slope2_deadband);
+    snprintf(cmd, LAKESIDE_LEN,  "CRd%d#", slope2_deadband);
 
     if (!SendCmd(cmd))
     {
@@ -1526,7 +1532,7 @@ bool Lakeside::setSlope1Period(uint32_t slope1_period)
     tcflush(PortFD, TCIOFLUSH);
 
     //CRennn#
-    sprintf(cmd, "CRe%d#", slope1_period);
+    snprintf(cmd, LAKESIDE_LEN,  "CRe%d#", slope1_period);
 
     if (!SendCmd(cmd))
     {
@@ -1562,7 +1568,7 @@ bool Lakeside::setSlope2Period(uint32_t slope2_period)
     tcflush(PortFD, TCIOFLUSH);
 
     //CRfnnn#
-    sprintf(cmd, "CRf%d#", slope2_period);
+    snprintf(cmd, LAKESIDE_LEN,  "CRf%d#", slope2_period);
 
     if (!SendCmd(cmd))
     {
@@ -1807,7 +1813,7 @@ bool Lakeside::ISNewNumber (const char * dev, const char * name, double values[]
         //                    }
 
         //                    FocusBacklashNP.s = IPS_OK;
-        //                    FocusBacklashN[0].value = new_back;
+        //                    FocusBacklashNP[0].setValue(new_back);
         //                    IDSetNumber(&FocusBacklashNP, nullptr);
 
         //                    return true;
@@ -2167,7 +2173,7 @@ bool Lakeside::ISNewNumber (const char * dev, const char * name, double values[]
 void Lakeside::GetFocusParams ()
 {
     if (updatePosition())
-        IDSetNumber(&FocusAbsPosNP, nullptr);
+        FocusAbsPosNP.apply();
 
     if (updateTemperature())
         IDSetNumber(&TemperatureNP, nullptr);
@@ -2177,16 +2183,16 @@ void Lakeside::GetFocusParams ()
         IDSetNumber(&TemperatureKNP, nullptr);
 
     if (updateBacklash())
-        IDSetNumber(&FocusBacklashNP, nullptr);
+        FocusBacklashNP.apply();
 
     if (updateMaxTravel())
-        IDSetNumber(&FocusMaxPosNP, nullptr);
+        FocusMaxPosNP.apply();
 
     if (updateStepSize())
         IDSetNumber(&StepSizeNP, nullptr);
 
     if (updateMoveDirection())
-        IDSetSwitch(&FocusReverseSP, nullptr);
+        FocusReverseSP.apply();
 
     if (updateSlope1Inc())
         IDSetNumber(&Slope1IncNP, nullptr);
@@ -2216,7 +2222,7 @@ void Lakeside::GetFocusParams ()
 
 IPState Lakeside::MoveRelFocuser(FocusDirection dir, uint32_t ticks)
 {
-    return MoveAbsFocuser(dir == FOCUS_INWARD ? FocusAbsPosN[0].value - ticks : FocusAbsPosN[0].value + ticks);
+    return MoveAbsFocuser(dir == FOCUS_INWARD ? FocusAbsPosNP[0].getValue() - ticks : FocusAbsPosNP[0].getValue() + ticks);
 }
 
 //
@@ -2247,7 +2253,7 @@ void Lakeside::TimerHit()
     }
 
     // focuser supposedly moving...
-    if (FocusAbsPosNP.s == IPS_BUSY )
+    if (FocusAbsPosNP.getState() == IPS_BUSY )
     {
         // Get actual status from focuser
         // Note: GetLakesideStatus sends position count when moving.
@@ -2262,18 +2268,18 @@ void Lakeside::TimerHit()
         {
             // no longer moving, so reset state to IPS_OK or IDLE?
             // IPS_OK turns light green
-            FocusAbsPosNP.s = IPS_OK;
+            FocusAbsPosNP.setState(IPS_OK);
             // update position
             // This is necessary in case user clicks short step moves in quick succession
             // Lakeside will abort move if command received during move
             rc = updatePosition();
-            IDSetNumber(&FocusAbsPosNP, nullptr);
-            LOGF_INFO("Focuser reached requested position %.f", FocusAbsPosN[0].value);
+            FocusAbsPosNP.apply();
+            LOGF_INFO("Focuser reached requested position %.f", FocusAbsPosNP[0].getValue());
         }
     }
 
     // focuser not moving, get temperature updates instead
-    if (FocusAbsPosNP.s == IPS_OK || FocusAbsPosNP.s == IPS_IDLE)
+    if (FocusAbsPosNP.getState() == IPS_OK || FocusAbsPosNP.getState() == IPS_IDLE)
     {
         // Get a temperature
         rc = updateTemperature();
@@ -2285,7 +2291,7 @@ void Lakeside::TimerHit()
     }
 
     // IPS_ALERT - any alert situation generated
-    //    if ( FocusAbsPosNP.s == IPS_ALERT )
+    //    if ( FocusAbsPosNP.getState() == IPS_ALERT )
     //    {
     //        LOG_DEBUG("TimerHit: Focuser state = IPS_ALERT");
     //    }
@@ -2355,7 +2361,7 @@ bool Lakeside::GetLakesideStatus()
         rc = updatePosition();
 
         // IPS_IDLE turns off light, IPS_OK turns light green
-        FocusAbsPosNP.s = IPS_OK;
+        FocusAbsPosNP.setState(IPS_OK);
 
         // return false as focuser is not known to be moving
         return false;
@@ -2369,8 +2375,8 @@ bool Lakeside::GetLakesideStatus()
         rc = sscanf(resp, "P%5d#", &pos);
         LOGF_INFO("Focuser Moving... position : %d", pos);
         // Update current position
-        FocusAbsPosN[0].value = pos;
-        IDSetNumber(&FocusAbsPosNP, nullptr);
+        FocusAbsPosNP[0].setValue(pos);
+        FocusAbsPosNP.apply();
 
         // return true as focuser IS moving
         return true;
@@ -2383,7 +2389,7 @@ bool Lakeside::GetLakesideStatus()
         // return false as focuser is not known to be moving
 
         // IPS_IDLE turns off light, IPS_OK turns light green
-        FocusAbsPosNP.s = IPS_OK;
+        FocusAbsPosNP.setState(IPS_OK);
 
         return false;
     }
@@ -2395,14 +2401,14 @@ bool Lakeside::GetLakesideStatus()
         // return false as focuser is not known to be moving
 
         // IPS_IDLE turns off light, IPS_OK turns light green
-        FocusAbsPosNP.s = IPS_OK;
+        FocusAbsPosNP.setState(IPS_OK);
 
         return false;
     }
 
     // At this point, something else is returned
     LOGF_DEBUG("GetLakesideStatus: Unknown response from buffer read : (%s)", resp);
-    FocusAbsPosNP.s = IPS_OK;
+    FocusAbsPosNP.setState(IPS_OK);
 
     // return false as focuser is not known to be moving
     return false;
@@ -2421,8 +2427,8 @@ bool Lakeside::AbortFocuser()
     if (SendCmd(cmd))
     {
         // IPS_IDLE turns off light, IPS_OK turns light green
-        FocusAbsPosNP.s = IPS_IDLE;
-        FocusAbsPosNP.s = IPS_OK;
+        FocusAbsPosNP.setState(IPS_IDLE);
+        FocusAbsPosNP.setState(IPS_OK);
         LOG_INFO("Focuser Abort Sent");
         return true;
     }

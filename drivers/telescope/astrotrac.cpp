@@ -40,13 +40,14 @@ const std::array<uint32_t, AstroTrac::SLEW_MODES> AstroTrac::SLEW_SPEEDS = {{1, 
 
 using namespace INDI::AlignmentSubsystem;
 
-AstroTrac::AstroTrac()
+AstroTrac::AstroTrac(): GI(this)
 {
-    setVersion(1, 0);
+    setVersion(1, 1);
 
     SetTelescopeCapability(TELESCOPE_CAN_PARK | TELESCOPE_CAN_SYNC | TELESCOPE_CAN_GOTO | TELESCOPE_CAN_ABORT |
                            TELESCOPE_HAS_TIME | TELESCOPE_HAS_LOCATION | TELESCOPE_HAS_TRACK_MODE | TELESCOPE_HAS_TRACK_RATE |
-                           TELESCOPE_CAN_CONTROL_TRACK | TELESCOPE_HAS_TRACK_RATE | TELESCOPE_HAS_PIER_SIDE,
+                           TELESCOPE_CAN_CONTROL_TRACK | TELESCOPE_HAS_TRACK_RATE | TELESCOPE_HAS_PIER_SIDE |
+                           TELESCOPE_CAN_SET_MOUNT_TYPE,
                            SLEW_MODES);
     setTelescopeConnection(CONNECTION_TCP);
 }
@@ -72,19 +73,19 @@ bool AstroTrac::initProperties()
     // Slew Speeds
     for (uint8_t i = 0; i < SLEW_MODES; i++)
     {
-        sprintf(SlewRateSP.sp[i].label, "%dx", SLEW_SPEEDS[i]);
-        SlewRateSP.sp[i].aux = (void *)&SLEW_SPEEDS[i];
+        SlewRateSP[i].setLabel(std::to_string(SLEW_SPEEDS[i]) + "x");
+        SlewRateSP[i].setAux((void *)&SLEW_SPEEDS[i]);
     }
-    SlewRateS[5].s = ISS_ON;
+    SlewRateSP[5].setState(ISS_ON);
 
-    // Mount Type
-    int configMountType = MOUNT_GEM;
-    IUGetConfigOnSwitchIndex(getDeviceName(), "MOUNT_TYPE", &configMountType);
-    MountTypeSP[MOUNT_GEM].fill("MOUNT_GEM", "GEM",
-                                configMountType == MOUNT_GEM ? ISS_ON : ISS_OFF);
-    MountTypeSP[MOUNT_SINGLE_ARM].fill("MOUNT_SINGLE_ARM", "Single ARM",
-                                       configMountType == MOUNT_GEM ? ISS_OFF : ISS_ON);
-    MountTypeSP.fill(getDeviceName(), "MOUNT_TYPE", "Mount Type", MAIN_CONTROL_TAB, IP_RW, ISR_1OFMANY, 60, IPS_IDLE);
+    // Mount Type: GEM, or Fork for the single arm setup (no meridian flip).
+    if (!MountTypeSP.load())
+    {
+        // Older configurations stored it in MOUNT_TYPE (0 = GEM, 1 = Single Arm).
+        int legacyType = 0;
+        if (IUGetConfigOnSwitchIndex(getDeviceName(), "MOUNT_TYPE", &legacyType) == 0 && legacyType == 1)
+            setMountType(MOUNT_EQ_FORK);
+    }
 
     // Acceleration
     AccelerationNP[AXIS_RA].fill("AXIS_RA", "RA arcsec/sec^2", "%.2f", 0, 3600, 100, 0);
@@ -96,11 +97,18 @@ bool AstroTrac::initProperties()
     EncoderNP[AXIS_DE].fill("AXIS_DE", "Declination", "%.2f", -3600, 3600, 100, 0);
     EncoderNP.fill(getDeviceName(), "MOUNT_ENCODERS", "Encoders", MOTION_TAB, IP_RW, 60, IPS_IDLE);
 
+    // How fast to guide compared to sidereal rate.
+    // The default rate is 0.1x sidereal, which is apparently the best for the mount accoring to the author of X2 plugin.
+    // Users may need to calibrate guiding for longer to see movement
+    GuideRateNP[AXIS_RA].fill("GUIDE_RATE_WE", "W/E Rate", "%g", 0, 1, 0.1, 0.1);
+    GuideRateNP[AXIS_DE].fill("GUIDE_RATE_NS", "N/S Rate", "%g", 0, 1, 0.1, 0.1);
+    GuideRateNP.fill(getDeviceName(), "GUIDE_RATE", "Guiding Rate", MOTION_TAB, IP_RW, 0, IPS_IDLE);
+
     TrackState = SCOPE_IDLE;
 
     SetParkDataType(PARK_RA_DEC_ENCODER);
 
-    initGuiderProperties(getDeviceName(), MOTION_TAB);
+    GI::initProperties(MOTION_TAB);
 
     tcpConnection->setDefaultHost("192.168.1.1");
     tcpConnection->setDefaultPort(23);
@@ -116,19 +124,9 @@ bool AstroTrac::initProperties()
     Initialise(this);
 
     // Force the alignment system to always be on
-    getSwitch("ALIGNMENT_SUBSYSTEM_ACTIVE")->sp[0].s = ISS_ON;
+    getSwitch("ALIGNMENT_SUBSYSTEM_ACTIVE")[0].setState(ISS_ON);
 
     return true;
-}
-
-/////////////////////////////////////////////////////////////////////////////
-///
-/////////////////////////////////////////////////////////////////////////////
-void AstroTrac::ISGetProperties(const char *dev)
-{
-    INDI::Telescope::ISGetProperties(dev);
-
-    defineProperty(&MountTypeSP);
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -145,12 +143,10 @@ bool AstroTrac::updateProperties()
         getVelocity(AXIS_RA);
         getVelocity(AXIS_DE);
 
-        defineProperty(&FirmwareTP);
-        defineProperty(&AccelerationNP);
-        defineProperty(&EncoderNP);
-        defineProperty(&GuideNSNP);
-        defineProperty(&GuideWENP);
-        defineProperty(&GuideRateNP);
+        defineProperty(FirmwareTP);
+        defineProperty(AccelerationNP);
+        defineProperty(EncoderNP);
+        defineProperty(GuideRateNP);
 
         // Initial AZ/AL parking position.
         if (InitPark())
@@ -170,13 +166,14 @@ bool AstroTrac::updateProperties()
     }
     else
     {
-        deleteProperty(FirmwareTP.getName());
-        deleteProperty(AccelerationNP.getName());
-        deleteProperty(EncoderNP.getName());
-        deleteProperty(GuideNSNP.name);
-        deleteProperty(GuideWENP.name);
-        deleteProperty(GuideRateNP->getName());
+        deleteProperty(FirmwareTP);
+        deleteProperty(AccelerationNP);
+        deleteProperty(EncoderNP);
+        deleteProperty(GuideRateNP);
     }
+
+    GI::updateProperties();
+
 
     return true;
 }
@@ -223,7 +220,7 @@ bool AstroTrac::getAcceleration(INDI_EQ_AXIS axis)
             AccelerationNP[axis].setValue(std::stoi(acceleration));
             return true;
         }
-        catch(...)
+        catch (...)
         {
             LOGF_DEBUG("Failed to parse acceleration (%s)", response);
         }
@@ -244,13 +241,12 @@ bool AstroTrac::setAcceleration(INDI_EQ_AXIS axis, uint32_t a)
         return response[3] == '#';
 
     return false;
-
 }
 
 /////////////////////////////////////////////////////////////////////////////
 ///
 /////////////////////////////////////////////////////////////////////////////
-bool AstroTrac::getVelocity(INDI_EQ_AXIS axis)
+bool AstroTrac::getVelocity(INDI_EQ_AXIS axis, double &value)
 {
     char command[DRIVER_LEN] = {0}, response[DRIVER_LEN] = {0};
     snprintf(command, DRIVER_LEN, "<%dv?>", axis + 1);
@@ -263,15 +259,30 @@ bool AstroTrac::getVelocity(INDI_EQ_AXIS axis)
                                        std::regex("<.v([+-]?[0-9]+\\.[0-9]+?)>"),
                                        std::string("$1"));
 
-            TrackRateN[axis].value = std::stod(velocity) * (m_Location.latitude >= 0 ? 1 : -1);
+            value = std::stod(velocity) * (m_Location.latitude >= 0 ? 1 : -1);
             return true;
         }
-        catch(...)
+        catch (...)
         {
             LOGF_DEBUG("Failed to parse velocity (%s)", response);
         }
     }
 
+    value = 0.0;
+    return false;
+}
+
+/////////////////////////////////////////////////////////////////////////////
+///
+/////////////////////////////////////////////////////////////////////////////
+bool AstroTrac::getVelocity(INDI_EQ_AXIS axis)
+{
+    double velocity(0);
+    if (getVelocity(axis, velocity))
+    {
+        TrackRateNP[axis].setValue(velocity);
+        return true;
+    }
     return false;
 }
 
@@ -283,12 +294,11 @@ bool AstroTrac::setVelocity(INDI_EQ_AXIS axis, double value)
     char command[DRIVER_LEN] = {0}, response[DRIVER_LEN] = {0};
 
     // Reverse value depending on hemisphere
-    snprintf(command, DRIVER_LEN, "<%dve%f>", axis + 1, value  * (m_Location.latitude >= 0 ? 1 : -1));
+    snprintf(command, DRIVER_LEN, "<%dve%f>", axis + 1, value * (m_Location.latitude >= 0 ? 1 : -1));
     if (sendCommand(command, response))
         return response[4] == '#';
 
     return false;
-
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -303,7 +313,6 @@ bool AstroTrac::stopMotion(INDI_EQ_AXIS axis)
         return response[3] == '#';
 
     return false;
-
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -372,7 +381,7 @@ bool AstroTrac::getEncoderPosition(INDI_EQ_AXIS axis)
             EncoderNP[axis].setValue(std::stod(position));
             return true;
         }
-        catch(...)
+        catch (...)
         {
             try
             {
@@ -388,7 +397,7 @@ bool AstroTrac::getEncoderPosition(INDI_EQ_AXIS axis)
                 EncoderNP[other].setValue(std::stod(position));
                 return true;
             }
-            catch(...)
+            catch (...)
             {
                 LOGF_DEBUG("Failed to parse position (%s)", response);
             }
@@ -405,7 +414,7 @@ bool AstroTrac::getEncoderPosition(INDI_EQ_AXIS axis)
 /// Mechanical HA Range: -90 to +90 degrees. Home Position Mechanical HA: 0
 /// For north hemisphere, home position HA = -6 hours, DE = 90 degrees.
 /////////////////////////////////////////////////////////////////////////////
-void AstroTrac::getRADEFromEncoders(double haEncoder, double deEncoder, double &ra, double &de)
+void AstroTrac::getRADEFromEncoders(double haEncoder, double deEncoder, double &ra, double &de, TelescopePierSide &pierSide)
 {
     static const double jitter = 0.0005;
     double ha = 0;
@@ -417,38 +426,43 @@ void AstroTrac::getRADEFromEncoders(double haEncoder, double deEncoder, double &
         deEncoder = 0;
 
     // Northern Hemisphere
-    if (LocationN[LOCATION_LATITUDE].value >= 0)
+    if (LocationNP[LOCATION_LATITUDE].getValue() >= 0)
     {
-        // "Normal" Pointing State (East, looking West)
-        if (MountTypeSP.findOnSwitchIndex() == MOUNT_SINGLE_ARM || deEncoder >= 0)
+        // "Normal" Pointing State (West, looking East)
+        if (getMountType() == MOUNT_EQ_FORK || deEncoder >= 0)
         {
             de = std::min(90 - deEncoder, 90.0);
-            ha = -6.0 + (haEncoder / 360.0) * 24.0 ;
+            ha = -6.0 + (haEncoder / 360.0) * 24.0;
+            pierSide = PIER_WEST;
         }
-        // "Reversed" Pointing State (West, looking East)
+        // "Reversed" Pointing State (East, looking West)
         else
         {
             de = 90 + deEncoder;
-            ha = 6.0 + (haEncoder / 360.0) * 24.0 ;
+            ha = 6.0 + (haEncoder / 360.0) * 24.0;
+            pierSide = PIER_EAST;
         }
     }
+    // Southern Hemisphere
     else
     {
-        // East
-        if (MountTypeSP.findOnSwitchIndex() == MOUNT_SINGLE_ARM || deEncoder <= 0)
+        // "Normal" Pointing State (West, looking East)
+        if (getMountType() == MOUNT_EQ_FORK || deEncoder <= 0)
         {
             de = std::max(-90 - deEncoder, -90.0);
-            ha = -6.0 - (haEncoder / 360.0) * 24.0 ;
+            ha = -6.0 - (haEncoder / 360.0) * 24.0;
+            pierSide = PIER_WEST;
         }
-        // West
+        // "Reversed" Pointing State (East, looking West)
         else
         {
             de = -90 + deEncoder;
-            ha = 6.0 - (haEncoder / 360.0) * 24.0 ;
+            ha = 6.0 - (haEncoder / 360.0) * 24.0;
+            pierSide = PIER_EAST;
         }
     }
 
-    double lst = get_local_sidereal_time(LocationN[LOCATION_LONGITUDE].value);
+    double lst = get_local_sidereal_time(LocationNP[LOCATION_LONGITUDE].getValue());
     ra = range24(lst - ha);
 
     char RAStr[32] = {0}, DecStr[32] = {0};
@@ -466,13 +480,13 @@ void AstroTrac::getRADEFromEncoders(double haEncoder, double deEncoder, double &
 /////////////////////////////////////////////////////////////////////////////
 void AstroTrac::getEncodersFromRADE(double ra, double de, double &haEncoder, double &deEncoder)
 {
-    double lst = get_local_sidereal_time(LocationN[LOCATION_LONGITUDE].value);
+    double lst = get_local_sidereal_time(LocationNP[LOCATION_LONGITUDE].getValue());
     double dHA = rangeHA(lst - ra);
     // Northern Hemisphere
-    if (LocationN[LOCATION_LATITUDE].value >= 0)
+    if (LocationNP[LOCATION_LATITUDE].getValue() >= 0)
     {
         // "Normal" Pointing State (East, looking West)
-        if (MountTypeSP.findOnSwitchIndex() == MOUNT_SINGLE_ARM || dHA <= 0)
+        if (getMountType() == MOUNT_EQ_FORK || dHA <= 0)
         {
             deEncoder = -(de - 90.0);
             haEncoder = (dHA + 6.0) * 360.0 / 24.0;
@@ -487,7 +501,7 @@ void AstroTrac::getEncodersFromRADE(double ra, double de, double &haEncoder, dou
     else
     {
         // "Normal" Pointing State (East, looking West)
-        if (MountTypeSP.findOnSwitchIndex() == MOUNT_SINGLE_ARM || dHA <= 0)
+        if (getMountType() == MOUNT_EQ_FORK || dHA <= 0)
         {
             deEncoder = -(de + 90.0);
             haEncoder = -(dHA + 6.0) * 360.0 / 24.0;
@@ -509,8 +523,8 @@ bool AstroTrac::Sync(double ra, double dec)
     AlignmentDatabaseEntry NewEntry;
     NewEntry.ObservationJulianDate = ln_get_julian_from_sys();
     // Actual Celestial Coordinates
-    NewEntry.RightAscension        = ra;
-    NewEntry.Declination           = dec;
+    NewEntry.RightAscension = ra;
+    NewEntry.Declination = dec;
     // Apparent Telescope Coordinates
     NewEntry.TelescopeDirection = TelescopeDirectionVectorFromEquatorialCoordinates(m_MountInternalCoordinates);
     NewEntry.PrivateDataSize = 0;
@@ -593,10 +607,10 @@ double AstroTrac::calculateSlewTime(double distance)
     // Firstly throw away sign of distance - don't care about direction - and convert to arcsec
     distance = fabs(distance) * 3600.0;
 
-    // Now estimate how far mount travels during accelertion and deceleration period
+    // Now estimate how far mount travels during acceleration and deceleration period
     double accelerate_decelerate = MAX_SLEW_VELOCITY * MAX_SLEW_VELOCITY / AccelerationNP[AXIS_RA].getValue();
 
-    // If distance less than this, then calulate using accleration forumlae:
+    // If distance less than this, then calculate using acceleration forumlae:
     if (distance < accelerate_decelerate)
     {
         return (2 * sqrt(distance / AccelerationNP[AXIS_RA].getValue()));
@@ -616,6 +630,7 @@ bool AstroTrac::ReadScopeStatus()
 {
     TelescopeDirectionVector TDV;
     double ra = 0, de = 0, skyRA = 0, skyDE = 0;
+    TelescopePierSide side;
 
     if (isSimulation())
         simulateMount();
@@ -624,7 +639,7 @@ bool AstroTrac::ReadScopeStatus()
     double lastDEEncoder = EncoderNP[AXIS_DE].getValue();
     if (getEncoderPosition(AXIS_RA) && getEncoderPosition(AXIS_DE))
     {
-        getRADEFromEncoders(EncoderNP[AXIS_RA].getValue(), EncoderNP[AXIS_DE].getValue(), ra, de);
+        getRADEFromEncoders(EncoderNP[AXIS_RA].getValue(), EncoderNP[AXIS_DE].getValue(), ra, de, side);
         // Send to client if changed.
         if (std::fabs(lastHAEncoder - EncoderNP[AXIS_RA].getValue()) > 0
                 || std::fabs(lastDEEncoder - EncoderNP[AXIS_DE].getValue()) > 0)
@@ -658,11 +673,11 @@ bool AstroTrac::ReadScopeStatus()
     m_MountInternalCoordinates.declination = de;
     TDV = TelescopeDirectionVectorFromEquatorialCoordinates(m_MountInternalCoordinates);
 
-    if (TransformTelescopeToCelestial(TDV, skyRA, skyDE))
+    if (TransformTelescopeToCelestialJD(TDV, skyRA, skyDE, ln_get_julian_from_sys()))
     {
-        double lst = get_local_sidereal_time(LocationN[LOCATION_LONGITUDE].value);
-        double dHA = rangeHA(lst - skyRA);
-        setPierSide(dHA < 0 ? PIER_EAST : PIER_WEST);
+        // double lst = get_local_sidereal_time(LocationNP[LOCATION_LONGITUDE].getValue());
+        // double dHA = rangeHA(lst - skyRA);
+        setPierSide(side);
 
         char mountRAString[32] = {0}, mountDEString[32] = {0}, skyRAString[32] = {0}, skyDEString[32] = {0};
         fs_sexa(mountRAString, ra, 2, 3600);
@@ -686,7 +701,7 @@ bool AstroTrac::ReadScopeStatus()
 bool AstroTrac::getTelescopeFromSkyCoordinates(double ra, double de, INDI::IEquatorialCoordinates &telescopeCoordinates)
 {
     TelescopeDirectionVector TDV;
-    if (TransformCelestialToTelescope(ra, de, 0.0, TDV))
+    if (TransformCelestialToTelescopeJD(ra, de, ln_get_julian_from_sys(), TDV))
     {
         EquatorialCoordinatesFromTelescopeDirectionVector(TDV, telescopeCoordinates);
         LOGF_DEBUG("TransformCelestialToTelescope: RA=%lf DE=%lf, TDV (x :%lf, y: %lf, z: %lf), local hour RA %lf DEC %lf",
@@ -740,6 +755,10 @@ bool AstroTrac::ISNewText(const char *dev, const char *name, char *texts[], char
 /////////////////////////////////////////////////////////////////////////////
 bool AstroTrac::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
 {
+    // Check guider interface
+    if (GI::processNumber(dev, name, values, names, n))
+        return true;
+
     if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
     {
         // Guide Rate
@@ -781,11 +800,8 @@ bool AstroTrac::ISNewNumber(const char *dev, const char *name, double values[], 
             return true;
         }
 
-        processGuiderProperties(name, values, names, n);
-
         // Process alignment properties
         ProcessAlignmentNumberProperties(this, name, values, names, n);
-
     }
 
     return INDI::Telescope::ISNewNumber(dev, name, values, names, n);
@@ -794,26 +810,16 @@ bool AstroTrac::ISNewNumber(const char *dev, const char *name, double values[], 
 /////////////////////////////////////////////////////////////////////////////
 ///
 /////////////////////////////////////////////////////////////////////////////
-bool AstroTrac::ISNewSwitch(const char *dev, const char *name, ISState * states, char *names[], int n)
+bool AstroTrac::ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n)
 {
     if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
     {
-        // Mount Type
-        if (MountTypeSP.isNameMatch(name))
-        {
-            MountTypeSP.update(states, names, n);
-            MountTypeSP.setState(IPS_OK);
-            MountTypeSP.apply();
-            return true;
-        }
-
         // Process alignment properties
         ProcessAlignmentSwitchProperties(this, name, states, names, n);
     }
 
     return INDI::Telescope::ISNewSwitch(dev, name, states, names, n);
 }
-
 
 /////////////////////////////////////////////////////////////////////////////////////
 ///
@@ -854,13 +860,14 @@ bool AstroTrac::MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command)
 
     if (command == MOTION_START)
     {
-        double velocity = SLEW_SPEEDS[IUFindOnSwitchIndex(&SlewRateSP)] * TRACKRATE_SIDEREAL
+        double velocity = SLEW_SPEEDS[SlewRateSP.findOnSwitchIndex()] * TRACKRATE_SIDEREAL
                           * (dir == DIRECTION_NORTH ? 1 : -1);
         setVelocity(AXIS_DE,  velocity);
     }
     else
     {
-        setVelocity(AXIS_DE, TrackRateN[AXIS_DE].value);
+        // reset tracking
+        SetTrackEnabled(TrackState == SCOPE_TRACKING);
         stopMotion(AXIS_DE);
     }
 
@@ -880,16 +887,30 @@ bool AstroTrac::MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command)
 
     if (command == MOTION_START)
     {
-        double velocity = SLEW_SPEEDS[IUFindOnSwitchIndex(&SlewRateSP)] * TRACKRATE_SIDEREAL
+        double velocity = SLEW_SPEEDS[SlewRateSP.findOnSwitchIndex()] * TRACKRATE_SIDEREAL
                           * (dir == DIRECTION_WEST ? 1 : -1);
         setVelocity(AXIS_RA,  velocity);
     }
     else
     {
-        setVelocity(AXIS_RA, TrackRateN[AXIS_RA].value);
+        // reset tracking
+        SetTrackEnabled(TrackState == SCOPE_TRACKING);
         stopMotion(AXIS_RA);
     }
 
+    return true;
+}
+
+/////////////////////////////////////////////////////////////////////////////
+///
+/////////////////////////////////////////////////////////////////////////////
+bool AstroTrac::SetMountType(TelescopeMountType type)
+{
+    if (type == MOUNT_ALTAZ)
+    {
+        LOG_ERROR("AstroTrac supports GEM and single arm (Fork) setups only.");
+        return false;
+    }
     return true;
 }
 
@@ -907,7 +928,7 @@ bool AstroTrac::updateLocation(double latitude, double longitude, double elevati
 /////////////////////////////////////////////////////////////////////////////
 ///
 /////////////////////////////////////////////////////////////////////////////
-bool AstroTrac::updateTime(ln_date * utc, double utc_offset)
+bool AstroTrac::updateTime(ln_date *utc, double utc_offset)
 {
     INDI_UNUSED(utc);
     INDI_UNUSED(utc_offset);
@@ -941,18 +962,41 @@ bool AstroTrac::SetDefaultPark()
 /////////////////////////////////////////////////////////////////////////////
 IPState AstroTrac::GuideNorth(uint32_t ms)
 {
-    // If track rate is zero, assume sidereal for DEC
-    double rate = TrackRateN[AXIS_DE].value > 0 ? TrackRateN[AXIS_DE].value : TRACKRATE_SIDEREAL;
-    // Find delta declination
-    double dDE = GuideRateNP.at(AXIS_DE)->getValue() * rate * ms / 1000.0;
-    // Final velocity guiding north is rate + dDE
+    // do nothing if idle
+    if (TrackState != SCOPE_TRACKING)
+    {
+        GuideNSNP[AXIS_RA].setValue(0);
+        GuideNSNP[AXIS_DE].setValue(0);
+        GuideNSNP.setState(IPS_OK);
+        GuideNSNP.apply();
+
+        LOG_INFO("Please start tracking to set guide pulse");
+
+        return IPS_IDLE;
+    }
+
+    // get the current velocity
+    double lastRARate(0), lastDERate(0);
+    getVelocity(AXIS_RA, lastRARate);
+    getVelocity(AXIS_DE, lastDERate);
+
+    // if current DEC velocity is zero, try RA otherwise assume sidereal
+    lastRARate = std::fabs(lastRARate);
+    double rate = std::fabs(lastDERate) > 0 ? lastDERate : (lastRARate > 0 ? lastRARate : TRACKRATE_SIDEREAL);
+
+    // absolute movement in arcseconds
+    double dDE = std::fabs(GuideRateNP.at(AXIS_DE)->getValue() * rate * ms / 1000.0);
+
+    // final velocity guiding north is rate + dDE
     setVelocity(AXIS_DE, rate + dDE);
     INDI::Timer::singleShot(ms, [this]()
     {
-        setVelocity(AXIS_DE, TrackRateN[AXIS_DE].value);
-        GuideNSN[AXIS_RA].value = GuideNSN[AXIS_DE].value = 0;
-        GuideNSNP.s = IPS_OK;
-        IDSetNumber(&GuideNSNP, nullptr);
+        // reset tracking
+        SetTrackEnabled(TrackState == SCOPE_TRACKING);
+        GuideNSNP[AXIS_RA].setValue(0);
+        GuideNSNP[AXIS_DE].setValue(0);
+        GuideNSNP.setState(IPS_OK);
+        GuideNSNP.apply();
     });
     return IPS_BUSY;
 }
@@ -962,18 +1006,41 @@ IPState AstroTrac::GuideNorth(uint32_t ms)
 /////////////////////////////////////////////////////////////////////////////
 IPState AstroTrac::GuideSouth(uint32_t ms)
 {
-    // If track rate is zero, assume sidereal for DEC
-    double rate = TrackRateN[AXIS_DE].value > 0 ? TrackRateN[AXIS_DE].value : TRACKRATE_SIDEREAL;
-    // Find delta declination
-    double dDE = GuideRateNP.at(AXIS_DE)->getValue() * rate * ms / 1000.0;
-    // Final velocity guiding south is rate - dDE
+    // do nothing if idle
+    if (TrackState != SCOPE_TRACKING)
+    {
+        GuideNSNP[AXIS_RA].setValue(0);
+        GuideNSNP[AXIS_DE].setValue(0);
+        GuideNSNP.setState(IPS_OK);
+        GuideNSNP.apply();
+
+        LOG_INFO("Please start tracking to set guide pulse");
+
+        return IPS_IDLE;
+    }
+
+    // get the current velocity
+    double lastRARate(0), lastDERate(0);
+    getVelocity(AXIS_RA, lastRARate);
+    getVelocity(AXIS_DE, lastDERate);
+
+    // if current DEC velocity is zero, try RA otherwise assume sidereal
+    lastRARate = std::fabs(lastRARate);
+    double rate = std::fabs(lastDERate) > 0 ? lastDERate : (lastRARate > 0 ? -lastRARate : -TRACKRATE_SIDEREAL);
+
+    // absolute movement in arcseconds
+    double dDE = std::fabs(GuideRateNP.at(AXIS_DE)->getValue() * rate * ms / 1000.0);
+
+    // final velocity guiding south is rate - dDE
     setVelocity(AXIS_DE, rate - dDE);
     INDI::Timer::singleShot(ms, [this]()
     {
-        setVelocity(AXIS_DE, TrackRateN[AXIS_DE].value);
-        GuideNSN[AXIS_RA].value = GuideNSN[AXIS_DE].value = 0;
-        GuideNSNP.s = IPS_OK;
-        IDSetNumber(&GuideNSNP, nullptr);
+        // reset tracking
+        SetTrackEnabled(TrackState == SCOPE_TRACKING);
+        GuideNSNP[AXIS_RA].setValue(0);
+        GuideNSNP[AXIS_DE].setValue(0);
+        GuideNSNP.setState(IPS_OK);
+        GuideNSNP.apply();
     });
     return IPS_BUSY;
 }
@@ -983,17 +1050,51 @@ IPState AstroTrac::GuideSouth(uint32_t ms)
 /////////////////////////////////////////////////////////////////////////////
 IPState AstroTrac::GuideEast(uint32_t ms)
 {
-    // Movement in arcseconds
-    double dRA = GuideRateNP.at(AXIS_RA)->getValue() * TrackRateN[AXIS_RA].value * ms / 1000.0;
-    // Final velocity guiding east is Sidereal + dRA
-    setVelocity(AXIS_RA, TrackRateN[AXIS_RA].value + dRA);
+    // do nothing if idle
+    if (TrackState != SCOPE_TRACKING)
+    {
+        GuideWENP[AXIS_RA].setValue(0);
+        GuideWENP[AXIS_DE].setValue(0);
+        GuideWENP.setState(IPS_OK);
+        GuideWENP.apply();
+
+        LOG_INFO("Please start tracking to set guide pulse");
+
+        return IPS_IDLE;
+    }
+
+    // get the current velocity
+    double lastRARate(0);
+    getVelocity(AXIS_RA, lastRARate);
+
+    // if the current RA rate is zero, which is a valid custom tracking rate, just assume sidereal
+    double rate = std::fabs(lastRARate) > 0 ? lastRARate : TRACKRATE_SIDEREAL;
+
+    // absolute movement in arcseconds
+    double dRA = std::fabs(GuideRateNP.at(AXIS_RA)->getValue() * rate * ms / 1000.0);
+
+    // not sure if this logic belongs here or the calling function
+    // // compensate RA velocity for declination
+    // TelescopeDirectionVector TDV;
+    // TDV = TelescopeDirectionVectorFromEquatorialCoordinates(m_MountInternalCoordinates);
+    // double skyRA = 0, skyDE = 0;
+    // if (TransformTelescopeToCelestial(TDV, skyRA, skyDE))
+    // {
+    //     dRA *= std::cos(M_PI / 180 * skyDE);
+    // }
+
+    // final velocity guiding east is rate + dRA, i.e the guide star will appear to move east
+    setVelocity(AXIS_RA, rate + dRA);
     INDI::Timer::singleShot(ms, [this]()
     {
-        setVelocity(AXIS_RA, TrackRateN[AXIS_RA].value);
-        GuideWEN[AXIS_RA].value = GuideWEN[AXIS_DE].value = 0;
-        GuideWENP.s = IPS_OK;
-        IDSetNumber(&GuideWENP, nullptr);
+        // reset the tracking mode
+        SetTrackEnabled(TrackState == SCOPE_TRACKING);
+        GuideWENP[AXIS_RA].setValue(0);
+        GuideWENP[AXIS_DE].setValue(0);
+        GuideWENP.setState(IPS_OK);
+        GuideWENP.apply();
     });
+
     return IPS_BUSY;
 }
 
@@ -1002,16 +1103,49 @@ IPState AstroTrac::GuideEast(uint32_t ms)
 /////////////////////////////////////////////////////////////////////////////
 IPState AstroTrac::GuideWest(uint32_t ms)
 {
-    // Movement in arcseconds
-    double dRA = GuideRateNP.at(AXIS_RA)->getValue() * TrackRateN[AXIS_RA].value * ms / 1000.0;
-    // Final velocity guiding east is Sidereal + dRA
-    setVelocity(AXIS_RA, TrackRateN[AXIS_RA].value - dRA);
+    // do nothing if idle
+    if (TrackState != SCOPE_TRACKING)
+    {
+        GuideWENP[AXIS_RA].setValue(0);
+        GuideWENP[AXIS_DE].setValue(0);
+        GuideWENP.setState(IPS_OK);
+        GuideWENP.apply();
+
+        LOG_INFO("Please start tracking to set guide pulse");
+
+        return IPS_IDLE;
+    }
+
+    // get the current velocity
+    double lastRARate(0);
+    getVelocity(AXIS_RA, lastRARate);
+
+    // if the current RA rate is zero, which is a valid custom tracking rate, just assume sidereal
+    double rate = std::fabs(lastRARate) > 0 ? lastRARate : TRACKRATE_SIDEREAL;
+
+    // absolute movement in arcseconds
+    double dRA = std::fabs(GuideRateNP.at(AXIS_RA)->getValue() * rate * ms / 1000.0);
+
+    // not sure if this logic belongs here or the calling function
+    // // compensate RA velocity for declination
+    // TelescopeDirectionVector TDV;
+    // TDV = TelescopeDirectionVectorFromEquatorialCoordinates(m_MountInternalCoordinates);
+    // double skyRA = 0, skyDE = 0;
+    // if (TransformTelescopeToCelestial(TDV, skyRA, skyDE))
+    // {
+    //     dRA *= std::cos(M_PI / 180 * skyDE);
+    // }
+
+    // final velocity guiding west is rate - dRA, i.e the guide star will appear to move west
+    setVelocity(AXIS_RA, rate - dRA);
     INDI::Timer::singleShot(ms, [this]()
     {
-        setVelocity(AXIS_RA, TrackRateN[AXIS_RA].value);
-        GuideWEN[AXIS_RA].value = GuideWEN[AXIS_DE].value = 0;
-        GuideWENP.s = IPS_OK;
-        IDSetNumber(&GuideWENP, nullptr);
+        // reset the tracking mode
+        SetTrackEnabled(TrackState == SCOPE_TRACKING);
+        GuideWENP[AXIS_RA].setValue(0);
+        GuideWENP[AXIS_DE].setValue(0);
+        GuideWENP.setState(IPS_OK);
+        GuideWENP.apply();
     });
     return IPS_BUSY;
 }
@@ -1038,8 +1172,8 @@ bool AstroTrac::SetTrackMode(uint8_t mode)
         dRA = TRACKRATE_LUNAR;
     else if (mode == TRACK_CUSTOM)
     {
-        dRA = TrackRateN[AXIS_RA].value;
-        dDE = TrackRateN[AXIS_DE].value;
+        dRA = TrackRateNP[AXIS_RA].getValue();
+        dDE = TrackRateNP[AXIS_DE].getValue();
     }
 
     return setVelocity(AXIS_RA, dRA) && setVelocity(AXIS_DE, dDE);
@@ -1052,7 +1186,7 @@ bool AstroTrac::SetTrackEnabled(bool enabled)
 {
     // On engaging track, we simply set the current track mode and it will take care of the rest including custom track rates.
     if (enabled)
-        return SetTrackMode(IUFindOnSwitchIndex(&TrackModeSP));
+        return SetTrackMode(TrackModeSP.findOnSwitchIndex());
     // Disable tracking
     else
     {
@@ -1068,7 +1202,6 @@ bool AstroTrac::SetTrackEnabled(bool enabled)
 bool AstroTrac::saveConfigItems(FILE *fp)
 {
     INDI::Telescope::saveConfigItems(fp);
-    IUSaveConfigSwitch(fp, &MountTypeSP);
     SaveAlignmentConfigProperties(fp);
     return true;
 }
@@ -1088,15 +1221,15 @@ void AstroTrac::simulateMount()
         return;
     }
 
-    if (MovementWESP.s == IPS_BUSY || MovementNSSP.s == IPS_BUSY)
+    if (MovementWESP.getState() == IPS_BUSY || MovementNSSP.getState() == IPS_BUSY)
     {
-        double haVelocity = SLEW_SPEEDS[IUFindOnSwitchIndex(&SlewRateSP)] * TRACKRATE_SIDEREAL
-                            * (IUFindOnSwitchIndex(&MovementWESP) == DIRECTION_NORTH ? 1 : -1) * (m_Location.latitude >= 0 ? 1 : -1);
-        double deVelocity = SLEW_SPEEDS[IUFindOnSwitchIndex(&SlewRateSP)] * TRACKRATE_SIDEREAL
-                            * (IUFindOnSwitchIndex(&MovementNSSP) == DIRECTION_NORTH ? 1 : -1) * (m_Location.latitude >= 0 ? 1 : -1);
+        double haVelocity = SLEW_SPEEDS[SlewRateSP.findOnSwitchIndex()] * TRACKRATE_SIDEREAL *
+                            (MovementWESP.findOnSwitchIndex() == DIRECTION_NORTH ? 1 : -1) * (m_Location.latitude >= 0 ? 1 : -1);
+        double deVelocity = SLEW_SPEEDS[SlewRateSP.findOnSwitchIndex()] * TRACKRATE_SIDEREAL *
+                            (MovementNSSP.findOnSwitchIndex() == DIRECTION_NORTH ? 1 : -1) * (m_Location.latitude >= 0 ? 1 : -1);
 
-        haVelocity *= MovementWESP.s == IPS_BUSY ? 1 : 0;
-        deVelocity *= MovementNSSP.s == IPS_BUSY ? 1 : 0;
+        haVelocity *= MovementWESP.getState() == IPS_BUSY ? 1 : 0;
+        deVelocity *= MovementNSSP.getState() == IPS_BUSY ? 1 : 0;
 
         // In degrees
         double elapsedDistanceHA = (elapsed / 1000.0 * haVelocity) / 3600.0;
@@ -1152,7 +1285,7 @@ void AstroTrac::simulateMount()
             case SCOPE_TRACKING:
             {
                 // Increase HA axis at selected tracking rate (arcsec/s).
-                SimData.currentMechanicalHA += (elapsed / 1000.0 * TrackRateN[AXIS_RA].value) / 3600.0;
+                SimData.currentMechanicalHA += (elapsed / 1000.0 * TrackRateNP[AXIS_RA].getValue()) / 3600.0;
                 if (SimData.currentMechanicalHA > 180)
                     SimData.currentMechanicalHA = 180;
                 else if (SimData.currentMechanicalHA < -180)
@@ -1177,7 +1310,7 @@ void AstroTrac::simulationTriggered(bool enable)
 /////////////////////////////////////////////////////////////////////////////
 /// Handle Simulation Command
 /////////////////////////////////////////////////////////////////////////////
-bool AstroTrac::handleSimulationCommand(const char * cmd, char * res, int cmd_len, int res_len)
+bool AstroTrac::handleSimulationCommand(const char *cmd, char *res, int cmd_len, int res_len)
 {
     INDI_UNUSED(cmd_len);
 
@@ -1187,12 +1320,12 @@ bool AstroTrac::handleSimulationCommand(const char * cmd, char * res, int cmd_le
         snprintf(res, res_len, "<%czvSIMU>", cmd[1]);
     }
     // Get Encoder Position
-    else if (strstr (cmd, "p?"))
+    else if (strstr(cmd, "p?"))
     {
         snprintf(res, res_len, "<%cp%.6f>", cmd[1], cmd[1] == '1' ? SimData.currentMechanicalHA : SimData.currentMechanicalDE);
     }
     // Set Encoder Position
-    else if (strstr (cmd, "p"))
+    else if (strstr(cmd, "p"))
     {
         double value = 0;
         sscanf(cmd, "<%*cp%lf", &value);
@@ -1203,12 +1336,12 @@ bool AstroTrac::handleSimulationCommand(const char * cmd, char * res, int cmd_le
         snprintf(res, res_len, "<%cp#>", cmd[1]);
     }
     // Get Acceleration
-    else if (strstr (cmd, "a?"))
+    else if (strstr(cmd, "a?"))
     {
         snprintf(res, res_len, "<%ca%u>", cmd[1], SimData.acceleration[cmd[1] - '1']);
     }
     // Set Acceleration
-    else if (strstr (cmd, "a"))
+    else if (strstr(cmd, "a"))
     {
         uint32_t value = 0;
         sscanf(cmd, "<%*ca%u", &value);
@@ -1216,12 +1349,12 @@ bool AstroTrac::handleSimulationCommand(const char * cmd, char * res, int cmd_le
         snprintf(res, res_len, "<%ca#>", cmd[1]);
     }
     // Get Velocity
-    else if (strstr (cmd, "v?"))
+    else if (strstr(cmd, "v?"))
     {
         snprintf(res, res_len, "<%cv%.6f>", cmd[1], SimData.velocity[cmd[1] - '1']);
     }
     // Set Velocity using encoders
-    else if (strstr (cmd, "ve"))
+    else if (strstr(cmd, "ve"))
     {
         double value = 0;
         sscanf(cmd, "<%*cve%lf", &value);
@@ -1229,7 +1362,7 @@ bool AstroTrac::handleSimulationCommand(const char * cmd, char * res, int cmd_le
         snprintf(res, res_len, "<%cve#>", cmd[1]);
     }
     // Get Slew status
-    else if (strstr (cmd, "t"))
+    else if (strstr(cmd, "t"))
     {
         char result = '0';
         if (cmd[1] == '1')
@@ -1239,7 +1372,7 @@ bool AstroTrac::handleSimulationCommand(const char * cmd, char * res, int cmd_le
         snprintf(res, res_len, "<%ct%c#>", cmd[1], result);
     }
     // Abort
-    else if (strstr (cmd, "x"))
+    else if (strstr(cmd, "x"))
     {
         snprintf(res, res_len, "<%cx#>", cmd[1]);
     }
@@ -1250,7 +1383,7 @@ bool AstroTrac::handleSimulationCommand(const char * cmd, char * res, int cmd_le
 /////////////////////////////////////////////////////////////////////////////
 /// Send Command
 /////////////////////////////////////////////////////////////////////////////
-bool AstroTrac::sendCommand(const char * cmd, char * res, int cmd_len, int res_len)
+bool AstroTrac::sendCommand(const char *cmd, char *res, int cmd_len, int res_len)
 {
     int nbytes_written = 0, nbytes_read = 0, rc = -1;
 
@@ -1318,7 +1451,7 @@ bool AstroTrac::sendCommand(const char * cmd, char * res, int cmd_len, int res_l
 /////////////////////////////////////////////////////////////////////////////
 ///
 /////////////////////////////////////////////////////////////////////////////
-void AstroTrac::hexDump(char * buf, const char * data, int size)
+void AstroTrac::hexDump(char *buf, const char *data, int size)
 {
     for (int i = 0; i < size; i++)
         sprintf(buf + 3 * i, "%02X ", static_cast<uint8_t>(data[i]));

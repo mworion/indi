@@ -1,5 +1,5 @@
 /*******************************************************************************
-  Copyright(c) 2017 Jarno Paananen. All right reserved.
+  Copyright(c) 2017-2024 Jarno Paananen. All right reserved.
 
   Driver for SnapCap dust cap / flat panel
 
@@ -32,18 +32,17 @@
 #include "indilightboxinterface.h"
 #include "indidustcapinterface.h"
 
-#include <stdint.h>
-
 namespace Connection
 {
 class Serial;
+class TCP;
 }
 
 class SnapCap : public INDI::DefaultDevice, public INDI::LightBoxInterface, public INDI::DustCapInterface
 {
     public:
         SnapCap();
-        virtual ~SnapCap() = default;
+        virtual ~SnapCap();
 
         virtual bool initProperties() override;
         virtual void ISGetProperties(const char *dev) override;
@@ -54,6 +53,28 @@ class SnapCap : public INDI::DefaultDevice, public INDI::LightBoxInterface, publ
         virtual bool ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n) override;
         virtual bool ISSnoopDevice(XMLEle *root) override;
 
+        /** \struct SnapcapConnection
+                \brief Holds the connection mode of the Dome.
+            */
+        enum
+        {
+            CONNECTION_NONE   = 1 << 0, /** Do not use any connection plugin */
+            CONNECTION_SERIAL = 1 << 1, /** For regular serial and bluetooth connections */
+            CONNECTION_TCP    = 1 << 2  /** For Wired and WiFI connections */
+        } DustcapConnection;
+
+        /**
+             * @brief setDustcapConnection Set Dustcap connection mode. Child class should call this in the constructor before Dustcap registers
+             * any connection interfaces
+             * @param value ORed combination of DustcapConnection values.
+             */
+        void setDustcapConnection(const uint8_t &value);
+
+        /**
+             * @return Get current Dustcap connection mode
+             */
+        uint8_t getDustcapConnection() const;
+
     protected:
         const char *getDefaultName() override;
 
@@ -63,6 +84,7 @@ class SnapCap : public INDI::DefaultDevice, public INDI::LightBoxInterface, publ
         // From Dust Cap
         virtual IPState ParkCap() override;
         virtual IPState UnParkCap() override;
+        virtual IPState AbortCap() override;
 
         // From Light Box
         virtual bool SetLightBoxBrightness(uint16_t value) override;
@@ -79,23 +101,14 @@ class SnapCap : public INDI::DefaultDevice, public INDI::LightBoxInterface, publ
 
         bool sendCommand(const char *command, char *response);
 
-        IPState Abort();
-
         // Status
-        ITextVectorProperty StatusTP;
-        IText StatusT[3] {};
+        INDI::PropertyText StatusTP{3};
 
         // Firmware version
-        ITextVectorProperty FirmwareTP;
-        IText FirmwareT[1] {};
-
-        // Abort
-        ISwitch AbortS[1];
-        ISwitchVectorProperty AbortSP;
+        INDI::PropertyText FirmwareTP{1};
 
         // Force open & close
-        ISwitch ForceS[2];
-        ISwitchVectorProperty ForceSP;
+        INDI::PropertySwitch ForceSP{2};
 
         int PortFD{ -1 };
         bool hasLight{ true };
@@ -106,5 +119,10 @@ class SnapCap : public INDI::DefaultDevice, public INDI::LightBoxInterface, publ
         uint8_t prevMotorStatus{ 0xFF };
         uint8_t prevBrightness{ 0xFF };
 
-        Connection::Serial *serialConnection{ nullptr };
+        Connection::Serial *serialConnection = nullptr;
+        Connection::TCP *tcpConnection       = nullptr;
+
+    private:
+        bool callHandshake();
+        uint8_t dustcapConnection = CONNECTION_SERIAL | CONNECTION_TCP;
 };

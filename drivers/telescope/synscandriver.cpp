@@ -37,7 +37,7 @@
 
 constexpr uint16_t SynscanDriver::SIM_SLEW_RATE[];
 
-SynscanDriver::SynscanDriver()
+SynscanDriver::SynscanDriver(): GI(this)
 {
     setVersion(2, 0);
 
@@ -63,19 +63,19 @@ bool SynscanDriver::initProperties()
     SetParkDataType(PARK_RA_DEC_ENCODER);
 
     // Slew Rates
-    strncpy(SlewRateS[0].label, "1x", MAXINDILABEL);
-    strncpy(SlewRateS[1].label, "8x", MAXINDILABEL);
-    strncpy(SlewRateS[2].label, "16x", MAXINDILABEL);
-    strncpy(SlewRateS[3].label, "32x", MAXINDILABEL);
-    strncpy(SlewRateS[4].label, "64x", MAXINDILABEL);
-    strncpy(SlewRateS[5].label, "128x", MAXINDILABEL);
-    strncpy(SlewRateS[6].label, "400x", MAXINDILABEL);
-    strncpy(SlewRateS[7].label, "600x", MAXINDILABEL);
-    strncpy(SlewRateS[8].label, "Max", MAXINDILABEL);
-    strncpy(SlewRateS[9].label, "Custom", MAXINDILABEL);
-    IUResetSwitch(&SlewRateSP);
+    SlewRateSP[0].setLabel("1x");
+    SlewRateSP[1].setLabel("8x");
+    SlewRateSP[2].setLabel("16x");
+    SlewRateSP[3].setLabel("32x");
+    SlewRateSP[4].setLabel("64x");
+    SlewRateSP[5].setLabel("128x");
+    SlewRateSP[6].setLabel("400x");
+    SlewRateSP[7].setLabel("600x");
+    SlewRateSP[8].setLabel("MAX");
+    SlewRateSP[9].setLabel("Custom");
+    SlewRateSP.reset();
     // Max is the default
-    SlewRateS[8].s = ISS_ON;
+    SlewRateSP[8].setState(ISS_ON);
 
     //////////////////////////////////////////////////////////////////////////////////////////////////
     /// Mount Info Text Property
@@ -124,7 +124,7 @@ bool SynscanDriver::initProperties()
     SetParkDataType(PARK_AZ_ALT);
 
     // Initialize guiding properties.
-    initGuiderProperties(getDeviceName(), GUIDE_TAB);
+    GI::initProperties(GUIDE_TAB);
 
     addAuxControls();
 
@@ -145,8 +145,6 @@ bool SynscanDriver::updateProperties()
         defineProperty(&HorizontalCoordsNP);
         defineProperty(&StatusTP);
         defineProperty(&CustomSlewRateNP);
-        defineProperty(&GuideNSNP);
-        defineProperty(&GuideWENP);
         defineProperty(&GuideRateNP);
 
         if (m_isAltAz)
@@ -157,14 +155,14 @@ bool SynscanDriver::updateProperties()
         if (InitPark())
         {
             SetAxis1ParkDefault(359);
-            SetAxis2ParkDefault(m_isAltAz ? 0 : LocationN[LOCATION_LATITUDE].value);
+            SetAxis2ParkDefault(m_isAltAz ? 0 : LocationNP[LOCATION_LATITUDE].getValue());
         }
         else
         {
             SetAxis1Park(359);
-            SetAxis2Park(m_isAltAz ? 0 : LocationN[LOCATION_LATITUDE].value);
+            SetAxis2Park(m_isAltAz ? 0 : LocationNP[LOCATION_LATITUDE].getValue());
             SetAxis1ParkDefault(359);
-            SetAxis2ParkDefault(m_isAltAz ? 0 : LocationN[LOCATION_LATITUDE].value);
+            SetAxis2ParkDefault(m_isAltAz ? 0 : LocationNP[LOCATION_LATITUDE].getValue());
         }
     }
     else
@@ -172,14 +170,14 @@ bool SynscanDriver::updateProperties()
         deleteProperty(HorizontalCoordsNP.name);
         deleteProperty(StatusTP.name);
         deleteProperty(CustomSlewRateNP.name);
-        deleteProperty(GuideNSNP.name);
-        deleteProperty(GuideWENP.name);
         deleteProperty(GuideRateNP.name);
         if (m_isAltAz)
         {
             deleteProperty(GotoModeSP.name);
         }
     }
+
+    GI::updateProperties();
 
     return true;
 }
@@ -238,6 +236,10 @@ bool SynscanDriver::Handshake()
 
 bool SynscanDriver::ISNewNumber(const char * dev, const char * name, double values[], char * names[], int n)
 {
+    // Check guider interface
+    if (GI::processNumber(dev, name, values, names, n))
+        return true;
+
     if (dev && !strcmp(dev, getDeviceName()))
     {
         // Guide Rate
@@ -266,7 +268,7 @@ bool SynscanDriver::ISNewNumber(const char * dev, const char * name, double valu
             return true;
         }
 
-        // Horizonal Coords
+        // Horizontal Coords
         if (!strcmp(name, HorizontalCoordsNP.name))
         {
             if (isParked())
@@ -301,13 +303,6 @@ bool SynscanDriver::ISNewNumber(const char * dev, const char * name, double valu
             IDSetNumber(&HorizontalCoordsNP, "Altitude or Azimuth missing or invalid.");
             return false;
         }
-
-        // Guiding
-        if (strcmp(name, GuideNSNP.name) == 0 || strcmp(name, GuideWENP.name) == 0)
-        {
-            processGuiderProperties(name, values, names, n);
-            return true;
-        }
     }
 
     return INDI::Telescope::ISNewNumber(dev, name, values, names, n);
@@ -317,16 +312,16 @@ bool SynscanDriver::ISNewSwitch(const char *dev, const char *name, ISState *stat
 {
     if (dev && !strcmp(dev, getDeviceName()))
     {
-        ISwitchVectorProperty *svp = getSwitch(name);
+        auto svp = getSwitch(name);
 
-        if (!strcmp(svp->name, GotoModeSP.name))
+        if (svp.isNameMatch(GotoModeSP.name))
         {
-            IUUpdateSwitch(svp, states, names, n);
-            ISwitch *sp = IUFindOnSwitch(svp);
+            svp.update(states, names, n);
+            auto sp = svp.findOnSwitch();
 
             assert(sp != nullptr);
 
-            if (!strcmp(sp->name, GotoModeS[0].name))
+            if (sp->isNameMatch(GotoModeS[0].name))
                 SetAltAzMode(true);
             else
                 SetAltAzMode(false);
@@ -383,11 +378,11 @@ bool SynscanDriver::readTracking()
         m_TrackingFlag = res[0];
 
         // Track mode?
-        if (((m_TrackingFlag - 1) != IUFindOnSwitchIndex(&TrackModeSP)) && (m_TrackingFlag))
+        if (((m_TrackingFlag - 1) != TrackModeSP.findOnSwitchIndex()) && (m_TrackingFlag))
         {
-            IUResetSwitch(&TrackModeSP);
-            TrackModeS[m_TrackingFlag - 1].s = ISS_ON;
-            IDSetSwitch(&TrackModeSP, nullptr);
+            TrackModeSP.reset();
+            TrackModeSP[m_TrackingFlag - 1].setState(ISS_ON);
+            TrackModeSP.apply();
         }
 
         switch(res[0])
@@ -574,7 +569,7 @@ bool SynscanDriver::SetTrackEnabled(bool enabled)
         return true;
 
     cmd[0] = 'T';
-    cmd[1] = enabled ? (IUFindOnSwitchIndex(&TrackModeSP) + 1) : 0;
+    cmd[1] = enabled ? (TrackModeSP.findOnSwitchIndex() + 1) : 0;
     return sendCommand(cmd, res, 2);
 }
 
@@ -593,6 +588,8 @@ bool SynscanDriver::SetTrackMode(uint8_t mode)
 bool SynscanDriver::SetAltAzMode(bool enable)
 {
     IUResetSwitch(&GotoModeSP);
+
+    setMountType(enable ? MOUNT_ALTAZ : MOUNT_EQ_GEM);
 
     if (enable)
     {
@@ -769,7 +766,7 @@ bool SynscanDriver::SetDefaultPark()
     // By default az to north, and alt to pole
     LOG_DEBUG("Setting Park Data to Default.");
     SetAxis1Park(359);
-    SetAxis2Park(LocationN[LOCATION_LATITUDE].value);
+    SetAxis2Park(LocationNP[LOCATION_LATITUDE].getValue());
 
     return true;
 }
@@ -804,7 +801,7 @@ bool SynscanDriver::MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command)
     else
         move = (dir == DIRECTION_NORTH) ? SYN_S : SYN_N;
 
-    uint8_t rate = static_cast<uint8_t>(IUFindOnSwitchIndex(&SlewRateSP)) + 1;
+    uint8_t rate = static_cast<uint8_t>(SlewRateSP.findOnSwitchIndex()) + 1;
     double customRate = CustomSlewRateN[AXIS_DE].value;
 
     // If we have pulse guiding
@@ -849,7 +846,7 @@ bool SynscanDriver::MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command)
 
     bool rc = false;
     SynscanDirection move = (dir == DIRECTION_WEST) ? SYN_W : SYN_E;
-    uint8_t rate = static_cast<uint8_t>(IUFindOnSwitchIndex(&SlewRateSP)) + 1;
+    uint8_t rate = static_cast<uint8_t>(SlewRateSP.findOnSwitchIndex()) + 1;
     double customRate = CustomSlewRateN[AXIS_RA].value;
 
     // If we have pulse guiding
@@ -953,10 +950,10 @@ bool SynscanDriver::sendTime()
         char timeString[MAXINDINAME] = {0};
         time_t now = time (nullptr);
         strftime(timeString, MAXINDINAME, "%T", gmtime(&now));
-        IUSaveText(&TimeT[0], "3");
-        IUSaveText(&TimeT[1], timeString);
-        TimeTP.s = IPS_OK;
-        IDSetText(&TimeTP, nullptr);
+        TimeTP[UTC].setText("3");
+        TimeTP[OFFSET].setText(timeString);
+        TimeTP.setState(IPS_OK);
+        TimeTP.apply();
         return true;
     }
 
@@ -988,18 +985,18 @@ bool SynscanDriver::sendTime()
         //  now we have time from the hand controller, we need to set some variables
         int sec;
         char utc[100];
-        char ofs[10];
+        char ofs[16] = {0};
         sec = static_cast<int>(utcTime.seconds);
         sprintf(utc, "%04d-%02d-%dT%d:%02d:%02d", utcTime.years, utcTime.months, utcTime.days, utcTime.hours,
                 utcTime.minutes, sec);
         if (daylightflag == 1)
             offset = offset + 1;
-        sprintf(ofs, "%d", offset);
+        snprintf(ofs, 16, "%d", offset);
 
-        IUSaveText(&TimeT[0], utc);
-        IUSaveText(&TimeT[1], ofs);
-        TimeTP.s = IPS_OK;
-        IDSetText(&TimeTP, nullptr);
+        TimeTP[UTC].setText(utc);
+        TimeTP[OFFSET].setText(ofs);
+        TimeTP.setState(IPS_OK);
+        TimeTP.apply();
 
         LOGF_INFO("Mount UTC Time %s Offset %d", utc, offset);
 
@@ -1016,9 +1013,9 @@ bool SynscanDriver::sendLocation()
 
     if (isSimulation())
     {
-        LocationN[LOCATION_LATITUDE].value  = 29.5;
-        LocationN[LOCATION_LONGITUDE].value = 48;
-        IDSetNumber(&LocationNP, nullptr);
+        LocationNP[LOCATION_LATITUDE].setValue(29.5);
+        LocationNP[LOCATION_LONGITUDE].setValue(48);
+        LocationNP.apply();
         return true;
     }
 
@@ -1057,9 +1054,9 @@ bool SynscanDriver::sendLocation()
         lat = lat * -1;
     if (h == 1)
         lon = 360 - lon;
-    LocationN[LOCATION_LATITUDE].value  = lat;
-    LocationN[LOCATION_LONGITUDE].value = lon;
-    IDSetNumber(&LocationNP, nullptr);
+    LocationNP[LOCATION_LATITUDE].setValue(lat);
+    LocationNP[LOCATION_LONGITUDE].setValue(lon);
+    LocationNP.apply();
 
     saveConfig(true, "GEOGRAPHIC_COORD");
 
@@ -1115,9 +1112,9 @@ bool SynscanDriver::updateLocation(double latitude, double longitude, double ele
     ln_lnlat_posn p1 { 0, 0 };
     lnh_lnlat_posn p2;
 
-    LocationN[LOCATION_LATITUDE].value  = latitude;
-    LocationN[LOCATION_LONGITUDE].value = longitude;
-    IDSetNumber(&LocationNP, nullptr);
+    LocationNP[LOCATION_LATITUDE].setValue(latitude);
+    LocationNP[LOCATION_LONGITUDE].setValue(longitude);
+    LocationNP.apply();
 
     if (isSimulation())
     {
@@ -1295,14 +1292,14 @@ void SynscanDriver::mountSim()
 
     dt  = tv.tv_sec - ltv.tv_sec + (tv.tv_usec - ltv.tv_usec) / 1e6;
     ltv = tv;
-    double currentSlewRate = SIM_SLEW_RATE[IUFindOnSwitchIndex(&SlewRateSP)] * TRACKRATE_SIDEREAL / 3600.0;
+    double currentSlewRate = SIM_SLEW_RATE[SlewRateSP.findOnSwitchIndex()] * TRACKRATE_SIDEREAL / 3600.0;
     da  = currentSlewRate * dt;
 
-    /* Process per current state. We check the state of EQUATORIAL_COORDS and act acoordingly */
+    /* Process per current state. We check the state of EQUATORIAL_COORDS and act accordingly */
     switch (TrackState)
     {
         case SCOPE_IDLE:
-            CurrentRA += (TrackRateN[AXIS_RA].value / 3600.0 * dt) / 15.0;
+            CurrentRA += (TrackRateNP[AXIS_RA].getValue() / 3600.0 * dt) / 15.0;
             CurrentRA = range24(CurrentRA);
             break;
 
@@ -1442,7 +1439,7 @@ IPState SynscanDriver::GuideEast(uint32_t ms)
 
     // So if we SID_RATE + 0.5 * SID_RATE for example, that's 150% of sidereal rate
     // but for east we'd be going a lot faster since the stars are moving toward the west
-    // in sideral rate. Just standing still we would SID_RATE moving across. So for east
+    // in sidereal rate. Just standing still we would SID_RATE moving across. So for east
     // we just go GuideRate * SID_RATE without adding any more values.
     //m_CustomGuideRA = TRACKRATE_SIDEREAL + GuideRateN[AXIS_RA].value * TRACKRATE_SIDEREAL;
     m_CustomGuideRA = GuideRateN[AXIS_RA].value * TRACKRATE_SIDEREAL;
@@ -1480,7 +1477,7 @@ void SynscanDriver::guideTimeoutHelperWE(void * context)
 
 void SynscanDriver::guideTimeoutCallbackNS()
 {
-    INDI_DIR_NS direction = static_cast<INDI_DIR_NS>(IUFindOnSwitchIndex(&MovementNSSP));
+    INDI_DIR_NS direction = static_cast<INDI_DIR_NS>(MovementNSSP.findOnSwitchIndex());
     MoveNS(direction, MOTION_STOP);
     GuideComplete(AXIS_DE);
     m_CustomGuideDE = m_GuideNSTID = 0;
@@ -1488,7 +1485,7 @@ void SynscanDriver::guideTimeoutCallbackNS()
 
 void SynscanDriver::guideTimeoutCallbackWE()
 {
-    INDI_DIR_WE direction = static_cast<INDI_DIR_WE>(IUFindOnSwitchIndex(&MovementWESP));
+    INDI_DIR_WE direction = static_cast<INDI_DIR_WE>(MovementWESP.findOnSwitchIndex());
     MoveWE(direction, MOTION_STOP);
     GuideComplete(AXIS_RA);
     m_CustomGuideRA = m_GuideWETID = 0;

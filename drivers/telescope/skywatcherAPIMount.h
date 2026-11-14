@@ -21,6 +21,8 @@
 #include "indipropertynumber.h"
 #include "indipropertyswitch.h"
 #include "alignment/AlignmentSubsystemForDrivers.h"
+#include "pid/pid.h"
+#include <numeric>
 
 typedef enum { PARK_COUNTERCLOCKWISE = 0, PARK_CLOCKWISE } ParkDirection_t;
 typedef enum { PARK_NORTH = 0, PARK_EAST, PARK_SOUTH, PARK_WEST } ParkPosition_t;
@@ -113,6 +115,12 @@ class SkywatcherAPIMount :
             long &Axis2Microsteps);
         const INDI::AlignmentSubsystem::TelescopeDirectionVector
         TelescopeDirectionVectorFromSkywatcherMicrosteps(long Axis1Microsteps, long Axis2Microsteps);
+        double AzimuthToDegrees(double degree);
+        double DegreesToAzimuth(double degree);
+        bool isNorthHemisphere() const
+        {
+            return m_Location.latitude >= 0;
+        }
 
         /////////////////////////////////////////////////////////////////////////////////////
         /// Misc
@@ -122,6 +130,27 @@ class SkywatcherAPIMount :
         bool getCurrentRADE(INDI::IHorizontalCoordinates altaz, INDI::IEquatorialCoordinates &rade);
         // Reset tracking timer to account for drift compensation
         void resetTracking();
+        // Classical tracking via PID control loop
+        bool trackUsingPID();
+        // Simpler tracking loop develped by Paweł T. Jochym
+        bool trackUsingPredictiveRates();
+        // Get guide ticks
+        void getGuidePulses(double &az, double &alt);
+
+        /**
+         * @brief TrackByRate Set axis tracking rate in arcsecs/sec.
+         * @param axis AXIS1 AZ or AXIS2 ALT
+         * @param rate arcsecs/s. Zero would stop tracking.
+         * For AZ, negative means left while positive means right.
+         * For Alt, negative is down while positive is up.
+         * @return True if successful, false otherwise.
+         */
+        bool trackByRate(AXISID axis, double rate);
+
+        inline double average(const std::vector<double> &values)
+        {
+            return values.empty() ? 0 : std::accumulate(values.begin(), values.end(), 0.0) / values.size();
+        }
 
         /////////////////////////////////////////////////////////////////////////////////////
         /// Properties
@@ -202,7 +231,41 @@ class SkywatcherAPIMount :
         INumber GuidingRatesN[2];
         INumberVectorProperty GuidingRatesNP;
 
-        INDI::PropertyNumber TrackFactorNP {2};
+        // PID controllers
+        INDI::PropertyNumber Axis1PIDNP {3};
+        INDI::PropertyNumber Axis2PIDNP {3};
+        enum
+        {
+            Propotional,
+            Derivative,
+            Integral
+        };
+
+        // Dead Zone
+        INDI::PropertyNumber AxisDeadZoneNP {2};
+
+        // Clock Rate Multiplier
+        INDI::PropertyNumber AxisClockNP {2};
+
+        // Offset
+        INDI::PropertyNumber AxisOffsetNP {5};
+        enum
+        {
+            RAOffset,
+            DEOffset,
+            AZSteps,
+            ALSteps,
+            JulianOffset,
+        };
+
+        // Axis 1 Direct Track Control
+        INDI::PropertyNumber Axis1TrackRateNP {2};
+        INDI::PropertyNumber Axis2TrackRateNP {2};
+        enum
+        {
+            TrackDirection,
+            TrackClockRate,
+        };
 
         // AUX Encoders
         INDI::PropertySwitch AUXEncoderSP {2};
@@ -217,18 +280,28 @@ class SkywatcherAPIMount :
         INDI::IEquatorialCoordinates m_SkyTrackingTarget { 0, 0 };
         INDI::IEquatorialCoordinates m_SkyCurrentRADE {0, 0};
         INDI::IHorizontalCoordinates m_MountAltAz {0, 0};
+
+        std::unique_ptr<PID> m_Controllers[2];
+
         // Maximum delta to track. If drift is above 5 degrees, we abort tracking.
         static constexpr double MAX_TRACKING_DELTA {5};
+        static constexpr const char *TRACKING_TAB = "Tracking";
+        static constexpr double ALT_BACKLASH_DEG {0.5};
+        static constexpr double AZ_BACKLASH_DEG {0.5};
+        static constexpr double MIN_TRACK_RATE_FACTOR {0.1};
 
-        long OldTrackingTarget[2] { 0, 0 };
         INDI::ElapsedTimer m_TrackingRateTimer;
+        int32_t m_LastTrackRate[2] = {-1, -1};
+        uint8_t m_LastCustomDirection[2];
         double GuideDeltaAlt { 0 };
         double GuideDeltaAz { 0 };
+        double m_LastOffset[2] = {0, 0};
+        uint8_t m_OffsetSwitchSettle[2] = {0, 0};
 
         GuidingPulse NorthPulse;
         GuidingPulse WestPulse;
         std::vector<GuidingPulse> GuidingPulses;
 
-        bool m_ManualMotionActive { false };
+        bool m_ManualMotionActive[2] { false, false };
         bool m_IterativeGOTOPending {false};
 };

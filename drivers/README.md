@@ -8,7 +8,7 @@ All drivers must provide complete and up to date user Documentation. The documen
 
 # Documentation Template
 
-Below are some documentation templates that can be used to write new documentation for your driver. Be direct, simple, and make no assumptions on the user knowledge. The documentation should be friendly to new useres with clear instructions accompined with screenshots and visual aids to ensure proper communication.
+Below are some documentation templates that can be used to write new documentation for your driver. Be direct, simple, and make no assumptions on the user knowledge. The documentation should be friendly to new useres with clear instructions accompanied with screenshots and visual aids to ensure proper communication.
 
 Screenshots for the driver functionalities are required. You can use whatever GUI client of your choice when submitting the screenshots. The format must be JPG and named after the INDI group/tab they belong to (e.g. main_control.jpg, options.jpg..etc).
 
@@ -16,17 +16,27 @@ Driver metadata is essential and includes the driver name, executable, version, 
 
 When submitting a driver to be merged in INDI, please submit along with it documentation that includes:
 
-+ Documentation template filled for your driver.
-+ Screenshot + Images used in the documentation (jpg only).
-+ Driver Metadata:
-++ Website
-++ Driver Name: Default driver name (**not** label).
-++ Driver Executable: indi_drivername_family..etc
-++ Family: Telescopes, Focusers, CCDs..etc
-++ Manufacturer
-++ Platforms: Which OS does it run on? The usual for INDI drivers is: Linux, BSD, OSX.
-++ Author
-++ Version
+- Documentation template filled for your driver.
+- Screenshot + Images used in the documentation (jpg only).
+- Driver Metadata:
+  - Website
+  - Driver Name: Default driver name (**not** label).
+  - Driver Executable: indi_drivername_family..etc
+  - Family: Telescopes, Focusers, CCDs..etc
+  - Manufacturer
+  - Platforms: Which OS does it run on? The usual for INDI drivers is: Linux, BSD, OSX.
+  - Author
+  - Version
+
+## Submitting Driver Listing
+
+INDI drivers are listed in [INDI Devices directory](https://indilib.org/devices). To submit a new driver:
+
+1. [Create an account](https://indilib.org/signin.html) on indilib.org. After your account is successfully registered, proceed the next step.
+2. [Add a new listing](https://indilib.org/devices/add.html).
+3. Switch the editor to code view, then copy and paste one the template below into the code view.
+4. Switch back to Editor view. Edit your listing. You can copy and paste INDI Control Panel images directly into the editor.
+5. After listing it added, it is pending review by moderators. If no comments are found, your listing will be published.
 
 ## Mount
 
@@ -92,9 +102,9 @@ sudo apt-get update &amp;&amp; sudo apt-get install indi-DRIVER_NAME
 			<li><strong>Both</strong>: Dome locks &amp; Dome parks policies are applied.</li>
 		</ul>
 		<br /><img style="display: block; margin-left: auto; margin-right: auto;" src="/images/devices/DRIVER_NAME/options.jpg" alt="Options" /></li>
-	<li><strong>Scope Properties</strong>: Enter the Primary and Seconday scope information.&nbsp;Up to six different configurations for&nbsp;<em>Primary</em>&nbsp;and Secondary&nbsp;<em>Guider</em>&nbsp;telescopes can be saved separately, each with an optional unique label in <strong>Scope Name</strong> property.</li>
+	<li><strong>Scope Properties</strong>: Enter the Primary and Secondary scope information.&nbsp;Up to six different configurations for&nbsp;<em>Primary</em>&nbsp;and Secondary&nbsp;<em>Guider</em>&nbsp;telescopes can be saved separately, each with an optional unique label in <strong>Scope Name</strong> property.</li>
 	<li><strong>Scope Config</strong>: Select the active scope configuration.</li>
-	<li><strong>Joystick</strong>: Enable or Disable joystick support. An INDI Joystick driver must be running for this function to work. For more details, check the <a href="/support/tutorials/135-controlling-your-telescope-with-a-joystick.html">INDI Telescope Joystick</a> tutorial.</li>	
+	<li><strong>Joystick</strong>: Enable or Disable joystick support. An INDI Joystick driver must be running for this function to work. For more details, check the <a href="/support/tutorials/135-controlling-your-telescope-with-a-joystick.html">INDI Telescope Joystick</a> tutorial.</li>
 </ul>
 <h3>Motion Control</h3>
 <p><img style="display: block; margin-left: auto; margin-right: auto;" src="/images/devices/DRIVER_NAME/motion_control.jpg" alt="Motion Control" /></p>
@@ -103,14 +113,14 @@ sudo apt-get update &amp;&amp; sudo apt-get install indi-DRIVER_NAME
 	<li><strong>Motion N/S/W/E</strong>: Directional manual motion control. Press the button to start the movement and release the button to stop.</li>
 	<li><strong>Slew Rate</strong>: Rate of manual motion control above where 1x equals one sidereal rate.</li>
 	<li><strong>Guide N/S/W/E</strong>: Guiding pulses durations in milliseconds. This property is meant for guider application (e.g. PHD2) and not intended to be used directly.</li>
-	<li><strong>Guiding Rate</strong>: Guiding Rate for RA &amp; DE. 0.3 means the mount shall move at 30% of the sidereal rate when the pulse is active. The sideral rate is ~15.04 arcseconds per second. So at 0.3x, the mount shall move 0.3*15.04 = 4.5 arcsecond per second. When receving a pulse for 1000ms, the total theoritical motion 4.5 arcseconds.</li>
+	<li><strong>Guiding Rate</strong>: Guiding Rate for RA &amp; DE. 0.3 means the mount shall move at 30% of the sidereal rate when the pulse is active. The sidereal rate is ~15.04 arcseconds per second. So at 0.3x, the mount shall move 0.3*15.04 = 4.5 arcsecond per second. When receiving a pulse for 1000ms, the total theoretical motion 4.5 arcseconds.</li>
 	<li><strong>Custom Speeds</strong>: Customs speeds in RA &amp; DEC axis when performing&nbsp;GOTO.</li>
 	<li><strong>Track Default</strong>: Default tracking rate to be used on startup.</li>
 	<li><strong>ST4 N/S/W/E</strong>: If the mount is receiving guiding pulses via ST4, apply this rate.</li>
 </ul>
 <p class="alert alert-info">The <b>Slew Rate</b> dropdown is used to control the <b>manual</b> speeds when using the NSWE controls either directly or via a joystick. To set the <b>GOTO</b> speeds (when mount moves from one target to another via a GOTO command), you need to update the <b>Custom Speeds</b> control.</p>
 <h3>Site Management</h3>
-<p>Time, Locaiton, and Park settings are configured in the Site Management tab.</p>
+<p>Time, Location, and Park settings are configured in the Site Management tab.</p>
 <p><img style="display: block; margin-right: auto; margin-left: auto;" src="/images/devices/DRIVER_NAME/site_management.jpg" alt="Site Management" /></p>
 <ul>
 	<li><strong>UTC</strong>: UTC time and offsets must be set for proper operation of the driver upon connection. The UTC offset is in hours. East is positive and west is negative.</li>
@@ -130,6 +140,7 @@ sudo apt-get update &amp;&amp; sudo apt-get install indi-DRIVER_NAME
 	</p>
 </form>
 ```
+
 ## CCD
 
 ```
@@ -195,7 +206,7 @@ This provides general information about the currently running driver and driver 
 <ul>
   <li><strong>Frame</strong>: Set the desired <i>Region-Of-Interest</i> (ROI) by specifying the starting X and Y positions of the image and the desired width and height. It is recommended to set use even numbers only to enable binning if required. The ROI values are indenepdent of the binning used.</li>
 <li><strong>Binning</strong>: Set the desired binning.</li>
-<li>The usually supported image compression can be turned on in image settings to compress FITS images. This might require more processing but can reduce the size of the image by <b>up to 70%</b>. The uploaded image would have an extenstion of .fits.fz and it can be viewed in multiple clients like KStars.</li>
+<li>The usually supported image compression can be turned on in image settings to compress FITS images. This might require more processing but can reduce the size of the image by <b>up to 70%</b>. The uploaded image would have an extension of .fits.fz and it can be viewed in multiple clients like KStars.</li>
 <li>The <b>Frame Type</b> property is used to mark the frame type in the FITS header which is useful information for some processing applications. If there an electronic or mechanical shutter, the driver closes it automatically when taking dark frames.</li>
 <li>To restore the ROI to the default values, click on the <b>Reset</b> button.</li>
 <h3>Image Info</h3>
@@ -238,7 +249,7 @@ List what the driver supports.
 
 <h3>Connecting to DRIVER_NAME</h3>
 <p>
-1. How is the device connectd? USB? Ethernet? WiFi..etc?
+1. How is the device connected? USB? Ethernet? WiFi..etc?
 2. Dedicate a section to each connection method. Put images of each. What configuration required..etc
 3. Any special settings to take care of to ensure successful connection?
 </p>
@@ -264,4 +275,3 @@ There are no known bugs for this driver. If you found a bug, please report it at
 	</p>
 </form>
 ```
-

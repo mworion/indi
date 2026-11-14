@@ -46,7 +46,7 @@ LX200AstroPhysicsGTOCP2::LX200AstroPhysicsGTOCP2() : LX200Generic()
 
 const char *LX200AstroPhysicsGTOCP2::getDefaultName()
 {
-    return (const char *)"AstroPhysics GTOCP2";
+    return "AstroPhysics GTOCP2";
 }
 
 bool LX200AstroPhysicsGTOCP2::initProperties()
@@ -55,58 +55,52 @@ bool LX200AstroPhysicsGTOCP2::initProperties()
 
     timeFormat = LX200_24;
 
-    IUFillNumber(&HourangleCoordsN[0], "HA", "HA H:M:S", "%10.6m", 0., 24., 0., 0.);
-    IUFillNumber(&HourangleCoordsN[1], "DEC", "Dec D:M:S", "%10.6m", -90.0, 90.0, 0., 0.);
-    IUFillNumberVector(&HourangleCoordsNP, HourangleCoordsN, 2, getDeviceName(), "HOURANGLE_COORD", "Hourangle Coords",
-                       MAIN_CONTROL_TAB, IP_RO, 0, IPS_IDLE);
+    HourangleCoordsNP[0].fill("HA", "HA H:M:S", "%10.6m", 0., 24., 0., 0.);
+    HourangleCoordsNP[1].fill("DEC", "Dec D:M:S", "%10.6m", -90.0, 90.0, 0., 0.);
+    HourangleCoordsNP.fill(getDeviceName(), "HOURANGLE_COORD", "Hourangle Coords", MAIN_CONTROL_TAB, IP_RO, 0, IPS_IDLE);
 
-    IUFillNumber(&HorizontalCoordsN[0], "AZ", "Az D:M:S", "%10.6m", 0., 360., 0., 0.);
-    IUFillNumber(&HorizontalCoordsN[1], "ALT", "Alt D:M:S", "%10.6m", -90., 90., 0., 0.);
-    IUFillNumberVector(&HorizontalCoordsNP, HorizontalCoordsN, 2, getDeviceName(), "HORIZONTAL_COORD",
-                       "Horizontal Coords", MAIN_CONTROL_TAB, IP_RW, 120, IPS_IDLE);
-
+    HorizontalCoordsNP[0].fill("AZ", "Az D:M:S", "%10.6m", 0., 360., 0., 0.);
+    HorizontalCoordsNP[1].fill("ALT", "Alt D:M:S", "%10.6m", -90., 90., 0., 0.);
+    HorizontalCoordsNP.fill(getDeviceName(), "HORIZONTAL_COORD", "Horizontal Coords", MAIN_CONTROL_TAB, IP_RW, 120, IPS_IDLE);
 
     // Max rate is 999.99999X for the GTOCP4.
     // Using :RR998.9999#  just to be safe. 15.041067*998.99999 = 15026.02578
-    TrackRateN[AXIS_RA].min = -15026.0258;
-    TrackRateN[AXIS_RA].max = 15026.0258;
-    TrackRateN[AXIS_DE].min = -998.9999;
-    TrackRateN[AXIS_DE].max = 998.9999;
+    TrackRateNP[AXIS_RA].setMin(-15026.0258);
+    TrackRateNP[AXIS_RA].setMax(15026.0258);
+    TrackRateNP[AXIS_DE].setMin(-998.9999);
+    TrackRateNP[AXIS_DE].setMax(998.9999);
 
     // Motion speed of axis when pressing NSWE buttons
-    IUFillSwitch(&SlewRateS[0], "12", "12x", ISS_OFF);
-    IUFillSwitch(&SlewRateS[1], "64", "64x", ISS_ON);
-    IUFillSwitch(&SlewRateS[2], "600", "600x", ISS_OFF);
-    IUFillSwitch(&SlewRateS[3], "1200", "1200x", ISS_OFF);
-    IUFillSwitchVector(&SlewRateSP, SlewRateS, 4, getDeviceName(), "TELESCOPE_SLEW_RATE", "Slew Rate", MOTION_TAB, IP_RW,
-                       ISR_1OFMANY, 0, IPS_IDLE);
+    // Note: SlewRateSP is defined in the base class LX200Generic
+    // We just set the labels here for AP specific values
+    SlewRateSP[0].setLabel("12x");
+    SlewRateSP[1].setLabel("64x");
+    SlewRateSP[1].setState(ISS_ON);
+    SlewRateSP[2].setLabel("600x");
+    SlewRateSP[3].setLabel("1200x");
 
     // Slew speed when performing regular GOTO
-    IUFillSwitch(&APSlewSpeedS[0], "600", "600x", ISS_ON);
-    IUFillSwitch(&APSlewSpeedS[1], "900", "900x", ISS_OFF);
-    IUFillSwitch(&APSlewSpeedS[2], "1200", "1200x", ISS_OFF);
-    IUFillSwitchVector(&APSlewSpeedSP, APSlewSpeedS, 3, getDeviceName(), "GOTO Rate", "", MOTION_TAB, IP_RW, ISR_1OFMANY,
-                       0, IPS_IDLE);
+    APSlewSpeedSP[0].fill("600", "600x", ISS_ON);
+    APSlewSpeedSP[1].fill("900", "900x", ISS_OFF);
+    APSlewSpeedSP[2].fill("1200", "1200x", ISS_OFF);
+    APSlewSpeedSP.fill(getDeviceName(), "GOTO Rate", "", MOTION_TAB, IP_RW, ISR_1OFMANY, 0, IPS_IDLE);
 
-    IUFillSwitch(&SwapS[0], "NS", "North/South", ISS_OFF);
-    IUFillSwitch(&SwapS[1], "EW", "East/West", ISS_OFF);
-    IUFillSwitchVector(&SwapSP, SwapS, 2, getDeviceName(), "SWAP", "Swap buttons", MOTION_TAB, IP_RW, ISR_1OFMANY, 0,
-                       IPS_IDLE);
+    SwapSP[0].fill("NS", "North/South", ISS_OFF);
+    SwapSP[1].fill("EW", "East/West", ISS_OFF);
+    SwapSP.fill(getDeviceName(), "SWAP", "Swap buttons", MOTION_TAB, IP_RW, ISR_1OFMANY, 0, IPS_IDLE);
 
-    IUFillSwitch(&SyncCMRS[USE_REGULAR_SYNC], ":CM#", ":CM#", ISS_ON);
-    IUFillSwitch(&SyncCMRS[USE_CMR_SYNC], ":CMR#", ":CMR#", ISS_OFF);
-    IUFillSwitchVector(&SyncCMRSP, SyncCMRS, 2, getDeviceName(), "SYNCCMR", "Sync", MOTION_TAB, IP_RW, ISR_1OFMANY, 0,
-                       IPS_IDLE);
+    SyncCMRSP[USE_REGULAR_SYNC].fill(":CM#", ":CM#", ISS_ON);
+    SyncCMRSP[USE_CMR_SYNC].fill(":CMR#", ":CMR#", ISS_OFF);
+    SyncCMRSP.fill(getDeviceName(), "SYNCCMR", "Sync", MOTION_TAB, IP_RW, ISR_1OFMANY, 0, IPS_IDLE);
 
     // guide speed
-    IUFillSwitch(&APGuideSpeedS[0], "0.25", "0.25x", ISS_OFF);
-    IUFillSwitch(&APGuideSpeedS[1], "0.5", "0.50x", ISS_ON);
-    IUFillSwitch(&APGuideSpeedS[2], "1.0", "1.0x", ISS_OFF);
-    IUFillSwitchVector(&APGuideSpeedSP, APGuideSpeedS, 3, getDeviceName(), "Guide Rate", "", GUIDE_TAB, IP_RW, ISR_1OFMANY,
-                       0, IPS_IDLE);
+    APGuideSpeedSP[0].fill("0.25", "0.25x", ISS_OFF);
+    APGuideSpeedSP[1].fill("0.5", "0.50x", ISS_ON);
+    APGuideSpeedSP[2].fill("1.0", "1.0x", ISS_OFF);
+    APGuideSpeedSP.fill(getDeviceName(), "Guide Rate", "", GUIDE_TAB, IP_RW, ISR_1OFMANY, 0, IPS_IDLE);
 
-    IUFillText(&VersionT[0], "Version", "Version", "");
-    IUFillTextVector(&VersionTP, VersionT, 1, getDeviceName(), "Firmware", "Firmware", MAIN_CONTROL_TAB, IP_RO, 0, IPS_IDLE);
+    VersionTP[0].fill("Version", "Version", "");
+    VersionTP.fill(getDeviceName(), "Firmware", "Firmware", MAIN_CONTROL_TAB, IP_RO, 0, IPS_IDLE);
 
     SetParkDataType(PARK_AZ_ALT);
 
@@ -119,13 +113,13 @@ void LX200AstroPhysicsGTOCP2::ISGetProperties(const char *dev)
 
     if (isConnected())
     {
-        defineProperty(&VersionTP);
+        defineProperty(VersionTP);
 
         /* Motion group */
-        defineProperty(&APSlewSpeedSP);
-        defineProperty(&SwapSP);
-        defineProperty(&SyncCMRSP);
-        defineProperty(&APGuideSpeedSP);
+        defineProperty(APSlewSpeedSP);
+        defineProperty(SwapSP);
+        defineProperty(SyncCMRSP);
+        defineProperty(APGuideSpeedSP);
     }
 }
 
@@ -135,44 +129,39 @@ bool LX200AstroPhysicsGTOCP2::updateProperties()
 
     if (isConnected())
     {
-        defineProperty(&VersionTP);
+        defineProperty(VersionTP);
+        VersionTP.load();
 
         /* Motion group */
-        defineProperty(&APSlewSpeedSP);
-        defineProperty(&SwapSP);
-        defineProperty(&SyncCMRSP);
-        defineProperty(&APGuideSpeedSP);
+        defineProperty(APSlewSpeedSP);
+        defineProperty(SwapSP);
+        defineProperty(SyncCMRSP);
+        defineProperty(APGuideSpeedSP);
 
         if (InitPark())
         {
             // If loading parking data is successful, we just set the default parking values.
-            SetAxis1ParkDefault(LocationN[LOCATION_LATITUDE].value >= 0 ? 0 : 180);
-            SetAxis2ParkDefault(LocationN[LOCATION_LATITUDE].value);
+            double currentLatitude = LocationNP[LOCATION_LATITUDE].getValue();
+            SetAxis1ParkDefault(currentLatitude >= 0 ? 0 : 180);
+            SetAxis2ParkDefault(currentLatitude);
         }
         else
         {
             // Otherwise, we set all parking data to default in case no parking data is found.
-            SetAxis1Park(LocationN[LOCATION_LATITUDE].value >= 0 ? 0 : 180);
-            SetAxis1ParkDefault(LocationN[LOCATION_LATITUDE].value);
-
-            SetAxis1ParkDefault(LocationN[LOCATION_LATITUDE].value >= 0 ? 0 : 180);
-            SetAxis2ParkDefault(LocationN[LOCATION_LATITUDE].value);
+            double currentLatitude = LocationNP[LOCATION_LATITUDE].getValue();
+            SetAxis1Park(currentLatitude >= 0 ? 0 : 180);
+            // Use the correct default values based on latitude
+            SetAxis1ParkDefault(currentLatitude >= 0 ? 0 : 180);
+            SetAxis2ParkDefault(currentLatitude);
         }
-
-        double longitude = -1000, latitude = -1000;
-        // Get value from config file if it exists.
-        IUGetConfigNumber(getDeviceName(), "GEOGRAPHIC_COORD", "LONG", &longitude);
-        IUGetConfigNumber(getDeviceName(), "GEOGRAPHIC_COORD", "LAT", &latitude);
-        if (longitude != -1000 && latitude != -1000)
-            updateLocation(latitude, longitude, 0);
     }
     else
     {
-        deleteProperty(VersionTP.name);
-        deleteProperty(APSlewSpeedSP.name);
-        deleteProperty(SwapSP.name);
-        deleteProperty(SyncCMRSP.name);
-        deleteProperty(APGuideSpeedSP.name);
+        deleteProperty(VersionTP);
+        deleteProperty(APSlewSpeedSP);
+        deleteProperty(SwapSP);
+        deleteProperty(SyncCMRSP);
+        deleteProperty(APGuideSpeedSP);
     }
 
     return true;
@@ -229,24 +218,26 @@ bool LX200AstroPhysicsGTOCP2::initMount()
     // Slew speeds so we have to keep two lists.
     //
     // SlewRateS is used as the MoveTo speed
-    if (isSimulation() == false && (err = selectAPMoveToRate(PortFD, IUFindOnSwitchIndex(&SlewRateSP))) < 0)
+    if (isSimulation() == false && (err = selectAPMoveToRate(PortFD, SlewRateSP.findOnSwitchIndex())) < 0)
     {
         LOGF_ERROR("Error setting move rate (%d).", err);
+        SlewRateSP.setState(IPS_ALERT);
+        SlewRateSP.apply("Error setting move rate.");
         return false;
     }
-
-    SlewRateSP.s = IPS_OK;
-    IDSetSwitch(&SlewRateSP, nullptr);
+    SlewRateSP.setState(IPS_OK);
+    SlewRateSP.apply();
 
     // APSlewSpeedsS defines the Slew (GOTO) speeds valid on the AP mounts
-    if (isSimulation() == false && (err = selectAPSlewRate(PortFD, IUFindOnSwitchIndex(&APSlewSpeedSP))) < 0)
+    if (isSimulation() == false && (err = selectAPSlewRate(PortFD, APSlewSpeedSP.findOnSwitchIndex())) < 0)
     {
         LOGF_ERROR("Error setting slew to rate (%d).", err);
+        APSlewSpeedSP.setState(IPS_ALERT);
+        APSlewSpeedSP.apply("Error setting GOTO rate.");
         return false;
     }
-
-    APSlewSpeedSP.s = IPS_OK;
-    IDSetSwitch(&APSlewSpeedSP, nullptr);
+    APSlewSpeedSP.setState(IPS_OK);
+    APSlewSpeedSP.apply();
 
     char versionString[128];
     if (isSimulation())
@@ -254,9 +245,9 @@ bool LX200AstroPhysicsGTOCP2::initMount()
     else
         getAPVersionNumber(PortFD, versionString);
 
-    VersionTP.s = IPS_OK;
-    IUSaveText(&VersionT[0], versionString);
-    IDSetText(&VersionTP, nullptr);
+    VersionTP[0].setText(versionString);
+    VersionTP.setState(IPS_OK);
+    VersionTP.apply();
 
     if (strlen(versionString) != 1)
     {
@@ -264,12 +255,13 @@ bool LX200AstroPhysicsGTOCP2::initMount()
         return false;
     }
 
-    int typeIndex = VersionT[0].text[0] - 'E';
+    // Use the text from the property now
+    int typeIndex = VersionTP[0].getText()[0] - 'E';
     if (typeIndex >= 0)
     {
         firmwareVersion = static_cast<ControllerVersion>(typeIndex);
         LOGF_DEBUG("Firmware version index: %d", typeIndex);
-        LOGF_INFO("Firmware Version: %c", VersionT[0].text[0]);
+        LOGF_INFO("Firmware Version: %c", VersionTP[0].getText()[0]);
     }
     else
     {
@@ -291,88 +283,96 @@ bool LX200AstroPhysicsGTOCP2::ISNewSwitch(const char *dev, const char *name, ISS
     // =======================================
     // Swap Buttons
     // =======================================
-    if (!strcmp(name, SwapSP.name))
+    if (SwapSP.isNameMatch(name))
     {
-        int currentSwap;
+        if (!SwapSP.update(states, names, n))
+            return false;
 
-        IUResetSwitch(&SwapSP);
-        IUUpdateSwitch(&SwapSP, states, names, n);
-        currentSwap = IUFindOnSwitchIndex(&SwapSP);
+        int currentSwap = SwapSP.findOnSwitchIndex();
 
         if ((!isSimulation() && (err = swapAPButtons(PortFD, currentSwap)) < 0))
         {
             LOGF_ERROR("Error swapping buttons (%d).", err);
+            SwapSP.setState(IPS_ALERT);
+            SwapSP.apply("Error swapping buttons.");
             return false;
         }
 
-        SwapS[0].s = ISS_OFF;
-        SwapS[1].s = ISS_OFF;
-        SwapSP.s   = IPS_OK;
-        IDSetSwitch(&SwapSP, nullptr);
+        SwapSP.reset();
+        SwapSP.setState(IPS_OK);
+        SwapSP.apply();
         return true;
     }
 
     // ===========================================================
     // GOTO ("slew") Speed.
     // ===========================================================
-    if (!strcmp(name, APSlewSpeedSP.name))
+    if (APSlewSpeedSP.isNameMatch(name))
     {
-        IUUpdateSwitch(&APSlewSpeedSP, states, names, n);
-        int slewRate = IUFindOnSwitchIndex(&APSlewSpeedSP);
+        if (!APSlewSpeedSP.update(states, names, n))
+            return false;
+
+        int slewRate = APSlewSpeedSP.findOnSwitchIndex();
 
         if (!isSimulation() && (err = selectAPSlewRate(PortFD, slewRate) < 0))
         {
-            LOGF_ERROR("Error setting move to rate (%d).", err);
+            LOGF_ERROR("Error setting GOTO rate (%d).", err);
+            APSlewSpeedSP.setState(IPS_ALERT);
+            APSlewSpeedSP.apply("Error setting GOTO rate.");
             return false;
         }
 
-        APSlewSpeedSP.s = IPS_OK;
-        IDSetSwitch(&APSlewSpeedSP, nullptr);
+        APSlewSpeedSP.setState(IPS_OK);
+        APSlewSpeedSP.apply();
         return true;
     }
 
     // ===========================================================
     // Guide Speed.
     // ===========================================================
-    if (!strcmp(name, APGuideSpeedSP.name))
+    if (APGuideSpeedSP.isNameMatch(name))
     {
-        IUUpdateSwitch(&APGuideSpeedSP, states, names, n);
-        int guideRate = IUFindOnSwitchIndex(&APGuideSpeedSP);
+        if (!APGuideSpeedSP.update(states, names, n))
+            return false;
+
+        int guideRate = APGuideSpeedSP.findOnSwitchIndex();
 
         if (!isSimulation() && (err = selectAPGuideRate(PortFD, guideRate) < 0))
         {
-            LOGF_ERROR("Error setting guiding to rate (%d).", err);
+            LOGF_ERROR("Error setting guide rate (%d).", err);
+            APGuideSpeedSP.setState(IPS_ALERT);
+            APGuideSpeedSP.apply("Error setting guide rate.");
             return false;
         }
 
-        APGuideSpeedSP.s = IPS_OK;
-        IDSetSwitch(&APGuideSpeedSP, nullptr);
+        APGuideSpeedSP.setState(IPS_OK);
+        APGuideSpeedSP.apply();
         return true;
     }
 
     // =======================================
     // Choose the appropriate sync command
     // =======================================
-    if (!strcmp(name, SyncCMRSP.name))
+    if (SyncCMRSP.isNameMatch(name))
     {
-        IUResetSwitch(&SyncCMRSP);
-        IUUpdateSwitch(&SyncCMRSP, states, names, n);
-        IUFindOnSwitchIndex(&SyncCMRSP);
-        SyncCMRSP.s = IPS_OK;
-        IDSetSwitch(&SyncCMRSP, nullptr);
+        if (!SyncCMRSP.update(states, names, n))
+            return false;
+
+        // No hardware command needed here, just update state
+        SyncCMRSP.setState(IPS_OK);
+        SyncCMRSP.apply();
         return true;
     }
 
     // =======================================
     // Choose the PEC playback mode
     // =======================================
-    if (!strcmp(name, PECStateSP.name))
+    if (PECStateSP.isNameMatch(name))
     {
-        IUResetSwitch(&PECStateSP);
-        IUUpdateSwitch(&PECStateSP, states, names, n);
-        IUFindOnSwitchIndex(&PECStateSP);
+        PECStateSP.reset();
+        PECStateSP.update(states, names, n);
 
-        int pecstate = IUFindOnSwitchIndex(&PECStateSP);
+        int pecstate = PECStateSP.findOnSwitchIndex();
 
         if (!isSimulation() && (err = selectAPPECState(PortFD, pecstate) < 0))
         {
@@ -380,8 +380,8 @@ bool LX200AstroPhysicsGTOCP2::ISNewSwitch(const char *dev, const char *name, ISS
             return false;
         }
 
-        PECStateSP.s = IPS_OK;
-        IDSetSwitch(&PECStateSP, nullptr);
+        PECStateSP.setState(IPS_OK);
+        PECStateSP.apply();
 
         return true;
     }
@@ -399,8 +399,8 @@ bool LX200AstroPhysicsGTOCP2::ReadScopeStatus()
 
     if (getLX200RA(PortFD, &currentRA) < 0 || getLX200DEC(PortFD, &currentDEC) < 0)
     {
-        EqNP.s = IPS_ALERT;
-        IDSetNumber(&EqNP, "Error reading RA/DEC.");
+        EqNP.setState(IPS_ALERT);
+        EqNP.apply("Error reading RA/DEC.");
         return false;
     }
 
@@ -426,8 +426,8 @@ bool LX200AstroPhysicsGTOCP2::ReadScopeStatus()
     {
         if (getLX200Az(PortFD, &currentAz) < 0 || getLX200Alt(PortFD, &currentAlt) < 0)
         {
-            EqNP.s = IPS_ALERT;
-            IDSetNumber(&EqNP, "Error reading Az/Alt.");
+            EqNP.setState(IPS_ALERT);
+            EqNP.apply("Error reading Az/Alt.");
             return false;
         }
 
@@ -477,29 +477,29 @@ bool LX200AstroPhysicsGTOCP2::Goto(double r, double d)
     fs_sexa(DecStr, targetDEC, 2, 3600);
 
     // If moving, let's stop it first.
-    if (EqNP.s == IPS_BUSY)
+    if (EqNP.getState() == IPS_BUSY)
     {
         if (!isSimulation() && abortSlew(PortFD) < 0)
         {
-            AbortSP.s = IPS_ALERT;
-            IDSetSwitch(&AbortSP, "Abort slew failed.");
+            AbortSP.setState(IPS_ALERT);
+            AbortSP.apply("Abort slew failed.");
             return false;
         }
 
-        AbortSP.s = IPS_OK;
-        EqNP.s    = IPS_IDLE;
-        IDSetSwitch(&AbortSP, "Slew aborted.");
-        IDSetNumber(&EqNP, nullptr);
+        AbortSP.setState(IPS_OK);
+        EqNP.setState(IPS_IDLE);
+        AbortSP.apply("Slew aborted.");
+        EqNP.apply();
 
-        if (MovementNSSP.s == IPS_BUSY || MovementWESP.s == IPS_BUSY)
+        if (MovementNSSP.getState() == IPS_BUSY || MovementWESP.getState() == IPS_BUSY)
         {
-            MovementNSSP.s = IPS_IDLE;
-            MovementWESP.s = IPS_IDLE;
-            EqNP.s = IPS_IDLE;
-            IUResetSwitch(&MovementNSSP);
-            IUResetSwitch(&MovementWESP);
-            IDSetSwitch(&MovementNSSP, nullptr);
-            IDSetSwitch(&MovementWESP, nullptr);
+            MovementNSSP.setState(IPS_IDLE);
+            MovementWESP.setState(IPS_IDLE);
+            EqNP.setState(IPS_IDLE);
+            MovementNSSP.reset();
+            MovementWESP.reset();
+            MovementNSSP.apply();
+            MovementWESP.apply();
         }
 
         // sleep for 100 mseconds
@@ -510,8 +510,9 @@ bool LX200AstroPhysicsGTOCP2::Goto(double r, double d)
     {
         if (setAPObjectRA(PortFD, targetRA) < 0 || (setAPObjectDEC(PortFD, targetDEC)) < 0)
         {
-            EqNP.s = IPS_ALERT;
-            IDSetNumber(&EqNP, "Error setting RA/DEC.");
+            EqNP.setState(IPS_ALERT);
+            LOG_ERROR("Error setting target RA/DEC.");
+            EqNP.apply();
             return false;
         }
 
@@ -520,8 +521,9 @@ bool LX200AstroPhysicsGTOCP2::Goto(double r, double d)
         /* Slew reads the '0', that is not the end of the slew */
         if ((err = Slew(PortFD)))
         {
-            EqNP.s = IPS_ALERT;
-            IDSetNumber(&EqNP, "Error Slewing to JNow RA %s - DEC %s\n", RAStr, DecStr);
+            EqNP.setState(IPS_ALERT);
+            LOGF_ERROR("Error Slewing to JNow RA %s - DEC %s", RAStr, DecStr);
+            EqNP.apply();
             slewError(err);
             return false;
         }
@@ -532,7 +534,8 @@ bool LX200AstroPhysicsGTOCP2::Goto(double r, double d)
     }
 
     TrackState = SCOPE_SLEWING;
-    //EqNP.s     = IPS_BUSY;
+    EqNP.setState(IPS_BUSY); // Set state to BUSY when slewing starts
+    EqNP.apply();
 
     LOGF_INFO("Slewing to RA: %s - DEC: %s", RAStr, DecStr);
     return true;
@@ -541,6 +544,7 @@ bool LX200AstroPhysicsGTOCP2::Goto(double r, double d)
 
 int LX200AstroPhysicsGTOCP2::SendPulseCmd(int8_t direction, uint32_t duration_msec)
 {
+    // handleGTOCP2MotionBug needs to be called *before* the pulse command
     if (firmwareVersion == MCV_E)
         handleGTOCP2MotionBug();
 
@@ -590,14 +594,14 @@ bool LX200AstroPhysicsGTOCP2::Sync(double ra, double dec)
 {
     char syncString[256];
 
-    int syncType = IUFindOnSwitchIndex(&SyncCMRSP);
+    int syncType = SyncCMRSP.findOnSwitchIndex();
 
     if (!isSimulation())
     {
         if (setAPObjectRA(PortFD, ra) < 0 || setAPObjectDEC(PortFD, dec) < 0)
         {
-            EqNP.s = IPS_ALERT;
-            IDSetNumber(&EqNP, "Error setting RA/DEC. Unable to Sync.");
+            EqNP.setState(IPS_ALERT);
+            EqNP.apply("Error setting sync RA/DEC.");
             return false;
         }
 
@@ -616,13 +620,16 @@ bool LX200AstroPhysicsGTOCP2::Sync(double ra, double dec)
                 break;
 
             default:
+                // Should not happen, but handle defensively
+                LOG_ERROR("Invalid sync type selected.");
+                syncOK = false;
                 break;
         }
 
         if (syncOK == false)
         {
-            EqNP.s = IPS_ALERT;
-            IDSetNumber(&EqNP, "Synchronization failed.");
+            EqNP.setState(IPS_ALERT);
+            EqNP.apply("Synchronization failed.");
             return false;
         }
 
@@ -634,9 +641,9 @@ bool LX200AstroPhysicsGTOCP2::Sync(double ra, double dec)
     LOGF_DEBUG("%s Synchronization successful %s", (syncType == USE_REGULAR_SYNC ? "CM" : "CMR"), syncString);
     LOG_INFO("Synchronization successful.");
 
-    EqNP.s     = IPS_OK;
+    EqNP.setState(IPS_OK); // Set state to OK after successful sync
 
-    NewRaDec(currentRA, currentDEC);
+    NewRaDec(currentRA, currentDEC); // This should update and apply EqNP
 
     return true;
 }
@@ -726,17 +733,20 @@ void LX200AstroPhysicsGTOCP2::debugTriggered(bool enable)
 // For most mounts the SetSlewRate() method sets both the MoveTo and Slew (GOTO) speeds.
 // For AP mounts these two speeds are handled separately - so SetSlewRate() actually sets the MoveTo speed for AP mounts - confusing!
 // ApSetSlew
+// For most mounts the SetSlewRate() method sets both the MoveTo and Slew (GOTO) speeds.
+// For AP mounts these two speeds are handled separately - so SetSlewRate() actually sets the MoveTo speed for AP mounts - confusing!
+// ApSetSlew
 bool LX200AstroPhysicsGTOCP2::SetSlewRate(int index)
 {
     if (!isSimulation() && selectAPMoveToRate(PortFD, index) < 0)
     {
-        SlewRateSP.s = IPS_ALERT;
-        IDSetSwitch(&SlewRateSP, "Error setting slew mode.");
+        SlewRateSP.setState(IPS_ALERT);
+        SlewRateSP.apply("Error setting move rate.");
         return false;
     }
 
-    SlewRateSP.s = IPS_OK;
-    IDSetSwitch(&SlewRateSP, nullptr);
+    SlewRateSP.setState(IPS_OK);
+    SlewRateSP.apply();
     return true;
 }
 
@@ -780,7 +790,8 @@ bool LX200AstroPhysicsGTOCP2::Park()
         lastAL = parkAlt;
     }
 
-    EqNP.s     = IPS_BUSY;
+    EqNP.setState(IPS_BUSY); // Set state to BUSY when parking starts
+    EqNP.apply();
     TrackState = SCOPE_PARKING;
     LOG_INFO("Parking is in progress...");
 
@@ -822,11 +833,17 @@ bool LX200AstroPhysicsGTOCP2::SetCurrentPark()
 
 bool LX200AstroPhysicsGTOCP2::SetDefaultPark()
 {
-    // Az = 0 for North hemisphere
-    SetAxis1Park(LocationN[LOCATION_LATITUDE].value > 0 ? 0 : 180);
+    // Use LocationNP which is the modern property vector
+    double currentLatitude = LocationNP[LOCATION_LATITUDE].getValue();
+    // Az = 0 for North hemisphere, 180 for South
+    SetAxis1ParkDefault(currentLatitude > 0 ? 0 : 180);
 
     // Alt = Latitude
-    SetAxis2Park(LocationN[LOCATION_LATITUDE].value);
+    SetAxis2ParkDefault(currentLatitude);
+
+    // Apply the defaults to the current park position as well initially
+    SetAxis1Park(GetAxis1ParkDefault());
+    SetAxis2Park(GetAxis2ParkDefault());
 
     return true;
 }
@@ -878,9 +895,9 @@ bool LX200AstroPhysicsGTOCP2::saveConfigItems(FILE *fp)
 {
     LX200Generic::saveConfigItems(fp);
 
-    IUSaveConfigSwitch(fp, &SyncCMRSP);
-    IUSaveConfigSwitch(fp, &APSlewSpeedSP);
-    IUSaveConfigSwitch(fp, &APGuideSpeedSP);
+    SyncCMRSP.save(fp);
+    APSlewSpeedSP.save(fp);
+    APGuideSpeedSP.save(fp);
 
     return true;
 }
@@ -893,11 +910,13 @@ bool LX200AstroPhysicsGTOCP2::SetTrackMode(uint8_t mode)
     {
         if (!isSimulation() && (err = selectAPTrackingMode(PortFD, AP_TRACKING_SIDEREAL)) < 0)
         {
-            LOGF_ERROR("Error setting tracking mode (%d).", err);
+            LOGF_ERROR("Error setting tracking mode to Sidereal for Custom Rate (%d).", err);
+            TrackModeSP.setState(IPS_ALERT);
+            TrackModeSP.apply();
             return false;
         }
-
-        return SetTrackRate(TrackRateN[AXIS_RA].value, TrackRateN[AXIS_DE].value);
+        // Use TrackRateNP now
+        return SetTrackRate(TrackRateNP[AXIS_RA].getValue(), TrackRateNP[AXIS_DE].getValue());
     }
 
     if (!isSimulation() && (err = selectAPTrackingMode(PortFD, mode)) < 0)
@@ -911,26 +930,19 @@ bool LX200AstroPhysicsGTOCP2::SetTrackMode(uint8_t mode)
 
 bool LX200AstroPhysicsGTOCP2::SetTrackEnabled(bool enabled)
 {
-    return SetTrackMode(enabled ? IUFindOnSwitchIndex(&TrackModeSP) : AP_TRACKING_OFF);
+    return SetTrackMode(enabled ? TrackModeSP.findOnSwitchIndex() : AP_TRACKING_OFF);
 }
 
 bool LX200AstroPhysicsGTOCP2::SetTrackRate(double raRate, double deRate)
 {
-    // Convert to arcsecs/s to AP sidereal multiplier
-    /*
-    :RR0.0000#      =       normal sidereal tracking in RA - similar to  :RT2#
-    :RR+1.0000#     =       1 + normal sidereal     =       2X sidereal
-    :RR+9.0000#     =       9 + normal sidereal     =       10X sidereal
-    :RR-1.0000#     =       normal sidereal - 1     =       0 or Stop - similar to  :RT9#
-    :RR-11.0000#    =       normal sidereal - 11    =       -10X sidereal (East at 10X)
-
-    :RD0.0000#      =       normal zero rate for Dec.
-    :RD5.0000#      =       5 + normal zero rate    =       5X sidereal clockwise from above - equivalent to South
-    :RD-5.0000#     =       normal zero rate - 5    =       5X sidereal counter-clockwise from above - equivalent to North
-    */
-
+    // Convert arcsecs/s to AP sidereal multiplier
     double APRARate = (raRate - TRACKRATE_SIDEREAL) / TRACKRATE_SIDEREAL;
     double APDERate = deRate / TRACKRATE_SIDEREAL;
+
+    // Update the TrackRateNP property values before sending to mount
+    TrackRateNP[AXIS_RA].setValue(raRate);
+    TrackRateNP[AXIS_DE].setValue(deRate);
+    // Don't apply() here as it might trigger unwanted updates, let ReadScopeStatus handle it.
 
     if (!isSimulation())
     {
@@ -974,8 +986,9 @@ void LX200AstroPhysicsGTOCP2::handleGTOCP2MotionBug()
     // So it must be reset to the user setting in order for guiding to work properly.
     if (motionCommanded)
     {
-        LOGF_DEBUG("%s: Issuing select guide rate index: %d", __FUNCTION__, IUFindOnSwitchIndex(&APGuideSpeedSP));
-        selectAPGuideRate(PortFD, IUFindOnSwitchIndex(&APGuideSpeedSP));
+        int guideRateIndex = APGuideSpeedSP.findOnSwitchIndex();
+        LOGF_DEBUG("%s: Issuing select guide rate index: %d", __FUNCTION__, guideRateIndex);
+        selectAPGuideRate(PortFD, guideRateIndex);
         motionCommanded = false;
     }
 }

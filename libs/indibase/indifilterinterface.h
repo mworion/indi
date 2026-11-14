@@ -23,6 +23,8 @@
 #include <string>
 #include <vector>
 #include "indibase.h"
+#include "indipropertytext.h"
+#include "indipropertynumber.h"
 
 /**
  * \class FilterInterface
@@ -31,7 +33,7 @@
    A filter wheel can be an independent device, or an embedded filter wheel within another device (e.g. CCD camera). Child class must implement all the
    pure virtual functions and call SelectFilterDone(int) when selection of a new filter position is complete in the hardware.
 
-   \e IMPORTANT: initFilterProperties() must be called before any other function to initilize the filter properties.
+   \e IMPORTANT: initFilterProperties() must be called before any other function to initialize the filter properties.
 
    \e IMPORTANT: processFilterSlot() must be called in your driver's ISNewNumber() function. processFilterSlot() will call the driver's
       SelectFilter() accordingly.
@@ -87,14 +89,14 @@ class FilterInterface
         ~FilterInterface();
 
         /**
-         * \brief Initilize filter wheel properties. It is recommended to call this function within
+         * \brief Initialize filter wheel properties. It is recommended to call this function within
          * initProperties() of your primary device
          * \param groupName Group or tab name to be used to define filter wheel properties.
          */
         void initProperties(const char *groupName);
 
         /**
-         * @brief updateProperties Defines or Delete proprties based on default device connection status
+         * @brief updateProperties Defines or Delete properties based on default device connection status
          * @return True if all is OK, false otherwise.
          */
         bool updateProperties();
@@ -118,16 +120,13 @@ class FilterInterface
         bool saveConfigItems(FILE *fp);
 
         //  A number vector for filter slot
-        INumberVectorProperty FilterSlotNP;
-        INumber FilterSlotN[1];
+        INDI::PropertyNumber FilterSlotNP {1};
 
-        //  A text vector that stores out physical port name
-        ITextVectorProperty *FilterNameTP { nullptr };
-        IText *FilterNameT;
+        //  A text vector that stores filter names
+        INDI::PropertyText FilterNameTP {0};
 
         int CurrentFilter = 1;
         int TargetFilter = 1;
-        bool loadingFromConfig = false;
 
         DefaultDevice *m_defaultDevice { nullptr };
 

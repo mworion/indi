@@ -15,10 +15,17 @@ OS=$(uname -s)
 
 case "$OS" in
     Darwin)
+        BREW="/usr/local/bin/brew"
+        if [[ $(uname -m) == "arm64" ]]
+        then
+            BREW="/opt/homebrew/bin/brew"
+        fi
+        brew update
         brew install \
             git \
             cfitsio libnova libusb curl \
-            gsl jpeg fftw librtlsdr libev
+            gsl erfa jpeg fftw librtlsdr libev \
+            qt@5
         ;;
     Linux)
         . /etc/os-release
@@ -31,25 +38,26 @@ case "$OS" in
                     git \
                     cmake build-essential zlib1g-dev \
                     libcfitsio-dev libnova-dev libusb-1.0-0-dev libcurl4-gnutls-dev \
-                    libgsl-dev libjpeg-dev libfftw3-dev librtlsdr-dev libev-dev
+                    libgsl-dev liberfa-dev libjpeg-dev libfftw3-dev librtlsdr-dev libev-dev \
+                    qtbase5-dev
                 ;;
             fedora)
                 $(command -v sudo) dnf upgrade -y
                 $(command -v sudo) dnf install -y \
                     git \
                     cmake gcc-c++ zlib-devel \
-                    cfitsio-devel libnova-devel libusb-devel libcurl-devel \
-                    gsl-devel libjpeg-devel fftw-devel rtl-sdr-devel libev-devel
+                    cfitsio-devel libnova-devel libusb1-devel libcurl-devel \
+                    gsl-devel erfa-devel libjpeg-devel fftw-devel rtl-sdr-devel libev-devel \
+                    qt5-qtbase-devel
                 ;;
-            centos)
-                # CentOS 8 dont have libnova-devel package
-                $(command -v sudo) yum install -y epel-release
-                $(command -v sudo) yum upgrade -y
-                $(command -v sudo) yum install -y \
+            arch)
+                $(command -v sudo) pacman -Syu --noconfirm
+                $(command -v sudo) pacman -S --noconfirm \
                     git \
-                    cmake gcc-c++ zlib-devel \
-                    cfitsio-devel libnova-devel libusb-devel libcurl-devel \
-                    gsl-devel libjpeg-devel fftw-devel rtlsdr-devel libev-devel
+                    cmake base-devel \
+                    cfitsio libnova libusb curl \
+                    gsl erfa libjpeg-turbo fftw rtl-sdr libev \
+                    qt5-base
                 ;;
             opensuse-tumbleweed)
                 # broken git/openssh package
@@ -59,7 +67,7 @@ case "$OS" in
                     openssh git \
                     cmake gcc-c++ zlib-devel \
                     cfitsio-devel libnova-devel libusb-devel libcurl-devel \
-                    gsl-devel libjpeg-devel fftw-devel rtlsdr-devel libtheora-devel libev-devel
+                    gsl-devel erfa-devel libjpeg-devel fftw-devel rtlsdr-devel libtheora-devel libev-devel
                 ;;
             *)
                 echo "Unknown Linux Distribution: $ID"

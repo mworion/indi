@@ -20,7 +20,7 @@
 
 #pragma once
 
-#include "indibase/indidome.h"
+#include "indidome.h"
 #include <map>
 
 class DomePro2 : public INDI::Dome
@@ -119,7 +119,7 @@ class DomePro2 : public INDI::Dome
                  * after the command is successfully sent.
                  * @param cmd_len if -1, it is assumed that the @a cmd is a null-terminated string. Otherwise, it would write @a cmd_len bytes from
                  * the @a cmd buffer.
-                 * @param res_len if -1 and if @a res is not nullptr, the function will read until it detects the default delimeter DRIVER_STOP_CHAR
+                 * @param res_len if -1 and if @a res is not nullptr, the function will read until it detects the default delimiter DRIVER_STOP_CHAR
                  *  up to DRIVER_LEN length. Otherwise, the function will read @a res_len from the device and store it in @a res.
                  * @return True if successful, false otherwise.
         */
@@ -130,32 +130,28 @@ class DomePro2 : public INDI::Dome
         ///////////////////////////////////////////////////////////////////////////////////
         /// Properties
         ///////////////////////////////////////////////////////////////////////////////////
-        ITextVectorProperty VersionTP;
-        IText VersionT[2] {};
+        INDI::PropertyText VersionTP {2};
         enum
         {
             VERSION_FIRMWARE,
             VERSION_HARDWARE
         };
 
-        ISwitchVectorProperty HomeSP;
-        ISwitch HomeS[2] {};
+        INDI::PropertySwitch HomeSP {2};
         enum
         {
             HOME_DISCOVER,
             HOME_GOTO
         };
 
-        ITextVectorProperty StatusTP;
-        IText StatusT[2] {};
+        INDI::PropertyText StatusTP {2};
         enum
         {
             STATUS_DOME,
             STATUS_SHUTTER
         };
 
-        INumberVectorProperty SettingsNP;
-        INumber SettingsN[5];
+        INDI::PropertyNumber SettingsNP {5};
         enum
         {
             SETTINGS_AZ_CPR,
@@ -174,7 +170,7 @@ class DomePro2 : public INDI::Dome
         static const char DRIVER_STOP_CHAR { 0x3B };
         // Wait up to a maximum of 3 seconds for serial input
         static constexpr const uint8_t DRIVER_TIMEOUT {3};
-        // Maximum buffer for sending/receving.
+        // Maximum buffer for sending/receiving.
         static constexpr const uint8_t DRIVER_LEN {64};
         // Dome AZ Threshold
         static constexpr const double DOME_AZ_THRESHOLD {0.01};
@@ -225,7 +221,7 @@ class DomePro2 : public INDI::Dome
             {"Parking", "Parking"},
             {"Gauging", "Gauging"},
             {"Timeout", "Azimuth movement timeout"},
-            {"Stall", "Azimuth encoder registering insufficent counts… motor stalled"},
+            {"Stall", "Azimuth encoder registering insufficient counts… motor stalled"},
             {"OCP", "Over Current Protection was tripped"}
         };
 

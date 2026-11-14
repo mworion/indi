@@ -75,9 +75,9 @@ int Logger::addDebugLevel(const char *debugLevelName, const char *loggingLevelNa
     if (customLevel == nlevels)
         return -1;
 
-    strncpy(Tags[customLevel], loggingLevelName, MAXINDINAME);
-    strncpy(DebugLevelSInit[customLevel].label, debugLevelName, MAXINDINAME);
-    strncpy(LoggingLevelSInit[customLevel].label, debugLevelName, MAXINDINAME);
+    snprintf(Tags[customLevel], MAXINDINAME, "%s", loggingLevelName);
+    snprintf(DebugLevelSInit[customLevel].label, MAXINDINAME, "%s", debugLevelName);
+    snprintf(LoggingLevelSInit[customLevel].label, MAXINDINAME, "%s", debugLevelName);
 
     return DebugLevelSInit[customLevel++].levelmask;
 }
@@ -403,6 +403,8 @@ void Logger::print(const char *devicename, const unsigned int verbosityLevel, co
     timersub(&currentTime, &initialTime_, &resTime);
 #if defined(__APPLE__)
     snprintf(usec, 7, "%06d", resTime.tv_usec);
+#elif defined(__USE_TIME64_REDIRECTS)
+    snprintf(usec, 7, "%06lld", resTime.tv_usec);
 #else
     snprintf(usec, 7, "%06ld", resTime.tv_usec);
 #endif

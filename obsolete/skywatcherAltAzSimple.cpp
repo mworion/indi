@@ -87,15 +87,18 @@ bool SkywatcherAltAzSimple::Abort()
     SlowStop(AXIS2);
     TrackState = SCOPE_IDLE;
 
-    if (GuideNSNP.s == IPS_BUSY || GuideWENP.s == IPS_BUSY)
+    if (GuideNSNP.getState() == IPS_BUSY || GuideWENP.getState() == IPS_BUSY)
     {
-        GuideNSNP.s = GuideWENP.s = IPS_IDLE;
-        GuideNSN[0].value = GuideNSN[1].value = 0.0;
-        GuideWEN[0].value = GuideWEN[1].value = 0.0;
+        GuideNSNP.setState(IPS_IDLE);
+        GuideWENP.setState(IPS_IDLE);
+        GuideNSNP[0].setValue(0);
+        GuideNSNP[1].setValue(0);
+        GuideWENP[0].setValue(0);
+        GuideWENP[1].setValue(0);
 
         IDMessage(getDeviceName(), "Guide aborted.");
-        IDSetNumber(&GuideNSNP, nullptr);
-        IDSetNumber(&GuideWENP, nullptr);
+        GuideNSNP.apply();
+        GuideWENP.apply();
 
         return true;
     }
@@ -527,7 +530,7 @@ void SkywatcherAltAzSimple::UpdateScopeConfigSwitch()
     XMLEle *CurrentXmlNode = nullptr;
     XMLAtt *Ap             = nullptr;
     bool DeviceFound       = false;
-    char ErrMsg[512];
+    char ErrMsg[XML_ERROR_SIZE];
 
     RootXmlNode = readXMLFile(FilePtr, XmlHandle, ErrMsg);
     delLilXML(XmlHandle);
@@ -597,16 +600,19 @@ void SkywatcherAltAzSimple::UpdateScopeConfigSwitch()
             // The config is not used yet
             if (!Found)
             {
-                strncpy(configSwitch->label, ("Config #" + std::to_string(i) + " - Not used").c_str(), MAXINDILABEL);
+                snprintf(configSwitch->label, MAXINDILABEL, "%s",
+                         ("Config #" + std::to_string(i) + " - Not used").c_str());
                 continue;
             }
             // Empty switch label
             if (ConfigName.empty())
             {
-                strncpy(configSwitch->label, ("Config #" + std::to_string(i) + " - Untitled").c_str(), MAXINDILABEL);
+                snprintf(configSwitch->label, MAXINDILABEL, "%s",
+                         ("Config #" + std::to_string(i) + " - Untitled").c_str());
                 continue;
             }
-            strncpy(configSwitch->label, ("Config #" + std::to_string(i) + " - " + ConfigName).c_str(), MAXINDILABEL);
+            snprintf(configSwitch->label, MAXINDILABEL, "%s",
+                     ("Config #" + std::to_string(i) + " - " + ConfigName).c_str());
         }
     }
     delXMLEle(RootXmlNode);

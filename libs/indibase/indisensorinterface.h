@@ -24,10 +24,6 @@
 #include "stream/streammanager.h"
 #include <fitsio.h>
 
-#ifdef HAVE_WEBSOCKET
-#include "indiwsserver.h"
-#endif
-
 #include <fitsio.h>
 
 #include <memory>
@@ -37,6 +33,8 @@
 #include <mutex>
 #include <thread>
 #include <stream/streammanager.h>
+#include <connectionplugins/connectionserial.h>
+#include <connectionplugins/connectiontcp.h>
 
 //JM 2019-01-17: Disabled until further notice
 //#define WITH_EXPOSURE_LOOPING
@@ -140,17 +138,17 @@ class SensorInterface : public DefaultDevice
         const char *getIntegrationStartTime();
 
         /**
-         * @brief getBuffer Get raw buffer of the stream of the Sensor device.
+         * @brief getBuffer Get continuum buffer of the stream of the Sensor device.
          * @return raw buffer of the Sensor device.
          */
         inline uint8_t *getBuffer()
         {
-            return Buffer;
+            return Continuum;
         }
 
         /**
-         * @brief setBuffer Set raw frame buffer pointer.
-         * @param buffer pointer to continuum buffer
+         * @brief setBuffer Set continuum frame buffer pointer.
+         * @param buffer pointer to flux buffer
          * /note Sensor Device allocates the frame buffer internally once SetBufferSize is called
          * with allocMem set to true which is the default behavior. If you allocated the memory
          * yourself (i.e. allocMem is false), then you must call this function to set the pointer
@@ -158,7 +156,131 @@ class SensorInterface : public DefaultDevice
          */
         inline void setBuffer(uint8_t *buffer)
         {
-            Buffer = buffer;
+            Continuum = buffer;
+        }
+
+        /**
+         * @brief getBuffer Get real buffer of the stream of the Sensor device.
+         * @return real buffer of the Sensor device.
+         */
+        inline uint8_t *getReal()
+        {
+            return Real;
+        }
+
+        /**
+         * @brief setBuffer Set real frame buffer pointer.
+         * @param buffer pointer to real buffer
+         * /note Sensor Device allocates the frame buffer internally once SetBufferSize is called
+         * with allocMem set to true which is the default behavior. If you allocated the memory
+         * yourself (i.e. allocMem is false), then you must call this function to set the pointer
+         * to the raw frame buffer.
+         */
+        inline void setReal(uint8_t *buffer)
+        {
+            int x = 0;
+            for(x = 0; x < getBufferSize(); x++) {
+                getMagnitude()[x] = pow(pow(getReal()[x], 2)+pow(buffer[x], 2), 0.5);
+                if(getMagnitude()[x] > 0) {
+                    getPhase()[x] = acos(buffer[x]/getMagnitude()[x]);
+                    if(asin(getReal()[x]/getMagnitude()[x]) < 0)
+                        getPhase()[x] += M_PI;
+                } else {
+                    getPhase()[x] = 0;
+                }
+            }
+
+            Real = buffer;
+        }
+
+        /**
+         * @brief getBuffer Get imaginary buffer of the stream of the Sensor device.
+         * @return imaginary buffer of the Sensor device.
+         */
+        inline uint8_t *getImaginary()
+        {
+            return Imaginary;
+        }
+
+        /**
+         * @brief setBuffer Set imaginary frame buffer pointer.
+         * @param buffer pointer to imaginary buffer
+         * /note Sensor Device allocates the frame buffer internally once SetBufferSize is called
+         * with allocMem set to true which is the default behavior. If you allocated the memory
+         * yourself (i.e. allocMem is false), then you must call this function to set the pointer
+         * to the raw frame buffer.
+         */
+        inline void setImaginary(uint8_t *buffer)
+        {
+            int x = 0;
+            for(x = 0; x < getBufferSize(); x++) {
+                getMagnitude()[x] = pow(pow(getReal()[x], 2)+pow(buffer[x], 2), 0.5);
+                if(getMagnitude()[x] > 0) {
+                getPhase()[x] = acos(buffer[x]/getMagnitude()[x]);
+                if(asin(getReal()[x]/getMagnitude()[x]) < 0)
+                    getPhase()[x] += M_PI;
+                } else {
+                    getPhase()[x] = 0;
+                }
+            }
+
+            Imaginary = buffer;
+        }
+
+        /**
+         * @brief getBuffer Get magnitude buffer of the stream of the Sensor device.
+         * @return magnitude buffer of the Sensor device.
+         */
+        inline uint8_t *getMagnitude()
+        {
+            return Magnitude;
+        }
+
+        /**
+         * @brief setBuffer Set magnitude frame buffer pointer.
+         * @param buffer pointer to magnitude buffer
+         * /note Sensor Device allocates the frame buffer internally once SetBufferSize is called
+         * with allocMem set to true which is the default behavior. If you allocated the memory
+         * yourself (i.e. allocMem is false), then you must call this function to set the pointer
+         * to the raw frame buffer.
+         */
+        inline void setMagnitude(uint8_t *buffer)
+        {
+            int x = 0;
+            for(x = 0; x < getBufferSize(); x++) {
+                getReal()[x] = sin(getPhase()[x]*buffer[x]);
+                getImaginary()[x] = cos(getPhase()[x]*buffer[x]);
+            }
+
+            Magnitude = buffer;
+        }
+
+        /**
+         * @brief getBuffer Get phase buffer of the stream of the Sensor device.
+         * @return phase buffer of the Sensor device.
+         */
+        inline uint8_t *getPhase()
+        {
+            return Phase;
+        }
+
+        /**
+         * @brief setBuffer Set phase frame buffer pointer.
+         * @param buffer pointer to phase buffer
+         * /note Sensor Device allocates the frame buffer internally once SetBufferSize is called
+         * with allocMem set to true which is the default behavior. If you allocated the memory
+         * yourself (i.e. allocMem is false), then you must call this function to set the pointer
+         * to the raw frame buffer.
+         */
+        inline void setPhase(uint8_t *buffer)
+        {
+            int x = 0;
+            for(x = 0; x < getBufferSize(); x++) {
+                getReal()[x] = sin(getPhase()[x]*buffer[x]);
+                getImaginary()[x] = cos(getPhase()[x]*buffer[x]);
+            }
+
+            Phase = buffer;
         }
 
         /**
@@ -231,7 +353,7 @@ class SensorInterface : public DefaultDevice
         void setNAxis(int value);
 
         /**
-         * @brief setIntegrationExtension Set integration exntension
+         * @brief setIntegrationExtension Set integration extension
          * @param ext extension (fits, jpeg, raw..etc)
          */
         void setIntegrationFileExtension(const char *ext);
@@ -291,7 +413,7 @@ class SensorInterface : public DefaultDevice
         virtual bool StartIntegration(double duration);
 
         /**
-         * \brief Uploads target Device exposed buffer as FITS to the client. Dervied classes should class
+         * \brief Uploads target Device exposed buffer as FITS to the client. Derived classes should class
          * this function when an Integration is complete.
          * @param targetDevice device that contains upload integration data
          * \note This function is not implemented in Sensor, it must be implemented in the child class
@@ -320,7 +442,7 @@ class SensorInterface : public DefaultDevice
          * \brief Add FITS keywords to a fits file
          * \param fptr pointer to a valid FITS file.
          * \param buf The buffer of the fits contents.
-         * \param len The lenght of the buffer.
+         * \param len The length of the buffer.
          * \note In additional to the standard FITS keywords, this function write the following
          * keywords the FITS file:
          * <ul>
@@ -338,6 +460,24 @@ class SensorInterface : public DefaultDevice
 
         /** A function to just remove GCC warnings about deprecated conversion */
         void fits_update_key_s(fitsfile *fptr, int type, std::string name, void *p, std::string explanation, int *status);
+
+        /** Return the connection file descriptor */
+        int getPortFD()
+        {
+            return PortFD;
+        }
+
+        /** Export the serial connection object */
+        Connection::Serial *getSerialConnection()
+        {
+            return serialConnection;
+        }
+
+        /** Export the TCP connection object */
+        Connection::TCP *getTcpConnection()
+        {
+            return tcpConnection;
+        }
 
     protected:
 
@@ -407,7 +547,7 @@ class SensorInterface : public DefaultDevice
         }
 
         /**
-         * @brief SetCapability Set the Sensor capabilities. Al fields must be initilized.
+         * @brief SetCapability Set the Sensor capabilities. Al fields must be initialized.
          * @param cap pointer to SensorCapability struct.
          */
         void SetCapability(uint32_t cap);
@@ -427,9 +567,8 @@ class SensorInterface : public DefaultDevice
         ISwitchVectorProperty AbortIntegrationSP;
         ISwitch AbortIntegrationS[1];
 
-        IBLOB FitsB;
+        IBLOB FitsB[5];
         IBLOBVectorProperty FitsBP;
-
         ITextVectorProperty ActiveDeviceTP;
         IText ActiveDeviceT[4] {};
 
@@ -511,9 +650,6 @@ class SensorInterface : public DefaultDevice
 
         std::unique_ptr<StreamManager> Streamer;
         std::unique_ptr<DSP::Manager> DSP;
-
-
-
         Connection::Serial *serialConnection = NULL;
         Connection::TCP *tcpConnection       = NULL;
 
@@ -528,17 +664,21 @@ class SensorInterface : public DefaultDevice
         /// # of Axis
         int NAxis;
         /// Bytes per Sample
-        uint8_t *Buffer;
+        uint8_t *Continuum;
+        uint8_t *Real;
+        uint8_t *Imaginary;
+        uint8_t *Magnitude;
+        uint8_t *Phase;
         int BufferSize;
         double integrationTime;
         double startIntegrationTime;
         char integrationExtention[MAXINDIBLOBFMT];
 
-        bool uploadFile(const void *fitsData, size_t totalBytes, bool sendIntegration, bool saveIntegration);
+        bool uploadFile(const void *fitsData, size_t totalBytes, IBLOB blob, bool sendIntegration, bool saveIntegration);
         void getMinMax(double *min, double *max, uint8_t *buf, int len, int bpp);
         int getFileIndex(const char *dir, const char *prefix, const char *ext);
 
         bool IntegrationCompletePrivate();
-        void* sendFITS(uint8_t* buf, int len);
+        void* sendFITS(uint8_t* buf, int len, IBLOB blob);
 };
 }

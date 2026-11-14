@@ -47,7 +47,7 @@ static void driverSendsProps(DriverMock &fakeDriver)
 
 static void clientReceivesProps(IndiClientMock &indiClient)
 {
-    fprintf(stderr, "Client reveives properties\n");
+    fprintf(stderr, "Client receives properties\n");
     for(int i = 0; i < PROP_COUNT; ++i)
     {
         indiClient.cnx.expectXml("<defNumberVector device='fakedev1' name='testnumber" + std::to_string(
@@ -66,7 +66,7 @@ static void startFakeDev1(IndiServerController &indiServer, DriverMock &fakeDriv
 
     fakeDriver.setup();
 
-    std::string fakeDriverPath = getTestExePath("fakedriver");
+    std::string fakeDriverPath = FAKEDRIVER_PATH;
 
     // Start indiserver with one instance, repeat 0
     indiServer.startDriver(fakeDriverPath);

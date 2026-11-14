@@ -82,6 +82,18 @@ class CelestronSCT : public INDI::Focuser
         // Get initial focuser parameters when we first connect
         bool getStartupParameters();
 
+        // truePos vs absPos:
+        // servo encoder values increase in CCW direction
+        // CCW travel moves primary mirror toward corrector plate, shifting focal plane away from OTA (i.e. increasingly "inside focus")
+        // max CCW travel corresponds to intrafocal limit
+        
+        // "absPos" is the position referenced to the INDI focus interface (0 = intrafocal limit, increasing values toward extrafocal limit)
+        inline uint32_t absPos(uint32_t truePos) { return truePosMax - truePos;}
+
+        // "truePos" is the position of the servo motor encoder reported over serial connection
+        inline uint32_t truePos(uint32_t absPos) { return truePosMax - absPos;}        
+        
+
         ///////////////////////////////////////////////////////////////////////////////
         /// Read Data From Controller
         ///////////////////////////////////////////////////////////////////////////////
@@ -103,17 +115,23 @@ class CelestronSCT : public INDI::Focuser
         //        INumber BacklashN[1];
         //        INumberVectorProperty BacklashNP;
 
-        INumber FocusMinPosN[1];
-        INumberVectorProperty FocusMinPosNP;
+        // INumber FocusMinPosN[1];
+        // INumberVectorProperty FocusMinPosNP;
+
+        uint32_t truePosMax;
+        uint32_t truePosMin;
 
         bool backlashMove;      // set if a final move is needed
         uint32_t finalPosition;
 
-        ISwitch CalibrateS[2];
-        ISwitchVectorProperty CalibrateSP;
+        INDI::PropertySwitch CalibrateSP {2};
+        enum
+        {
+            START,
+            STOP
+        };
 
-        IText CalibrateStateT[1] {};
-        ITextVectorProperty CalibrateStateTP;
+        INDI::PropertyText CalibrateStateTP {1};
 
         bool calibrateInProgress;
         int calibrateState;
@@ -124,8 +142,8 @@ class CelestronSCT : public INDI::Focuser
         /////////////////////////////////////////////////////////////////////////////
         //        // Celestron Buffer
         //        static const uint8_t CELESTRON_LEN { 32 };
-        //        // Celestorn Delimeter
+        //        // Celestorn Delimiter
         //        static const char CELESTRON_DEL { '#' };
-        //        // Celestron Tiemout in seconds
+        //        // Celestron Timeout in seconds
         //        static const uint8_t CELESTRON_TIMEOUT { 3 };
 };

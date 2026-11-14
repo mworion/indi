@@ -54,7 +54,7 @@ Version with experimental pulse guide support. GC 04.12.2015
 
 static std::unique_ptr<CelestronGPS> telescope(new CelestronGPS());
 
-CelestronGPS::CelestronGPS() : FI(this)
+CelestronGPS::CelestronGPS() : GI(this), FI(this)
 {
     setVersion(3, 6); // update libindi/drivers.xml as well
 
@@ -76,6 +76,9 @@ CelestronGPS::CelestronGPS() : FI(this)
 
     // focuser
     FI::SetCapability(FOCUSER_CAN_ABS_MOVE | FOCUSER_CAN_REL_MOVE | FOCUSER_CAN_ABORT | FOCUSER_HAS_BACKLASH);
+
+    focusTrueMax = 0;
+    focusTrueMin = 0xffffffff;
 
     // Set minimum properties.
     // ISGetProperties in INDI::Telescope checks for CanGOTO which must be set.
@@ -157,7 +160,7 @@ bool CelestronGPS::initProperties()
     SetParkDataType(PARK_AZ_ALT);
 
     //GUIDE Initialize guiding properties.
-    initGuiderProperties(getDeviceName(), GUIDE_TAB);
+    GI::initProperties(GUIDE_TAB);
 
     //////////////////////////////////////////////////////////////////////////////////////////////////
     /// Guide Rate; units and min/max as specified in the INDI Standard Properties SLEW_GUIDE
@@ -202,37 +205,37 @@ bool CelestronGPS::initProperties()
 
     //FocuserInterface
     //Initial, these will be updated later.
-    FocusRelPosN[0].min   = 0.;
-    FocusRelPosN[0].max   = 30000.;
-    FocusRelPosN[0].value = 0;
-    FocusRelPosN[0].step  = 1000;
-    FocusAbsPosN[0].min   = 0.;
-    FocusAbsPosN[0].max   = 60000.;
-    FocusAbsPosN[0].value = 0;
-    FocusAbsPosN[0].step  = 1000;
+    FocusRelPosNP[0].setMin(0.);
+    FocusRelPosNP[0].setMax(30000.);
+    FocusRelPosNP[0].setValue(0);
+    FocusRelPosNP[0].setStep(1000);
+    FocusAbsPosNP[0].setMin(0.);
+    FocusAbsPosNP[0].setMax(60000.);
+    FocusAbsPosNP[0].setValue(0);
+    FocusAbsPosNP[0].setStep(1000);
 
     // Maximum Position Settings, will be read from the hardware
-    FocusMaxPosN[0].max   = 60000;
-    FocusMaxPosN[0].min   = 1000;
-    FocusMaxPosN[0].value = 60000;
-    FocusMaxPosNP.p = IP_RO;
+    FocusMaxPosNP[0].setMax(60000);
+    FocusMaxPosNP[0].setMin(1000);
+    FocusMaxPosNP[0].setValue(60000);
+    FocusMaxPosNP.setPermission(IP_RO);
 
     // Focuser backlash
     // CR this is a value, positive or negative to define the direction.  It is implemented
     // in the driver.
 
-    FocusBacklashN[0].min = -1000;
-    FocusBacklashN[0].max = 1000;
-    FocusBacklashN[0].step = 1;
-    FocusBacklashN[0].value = 0;
+    FocusBacklashNP[0].setMin(-1000);
+    FocusBacklashNP[0].setMax(1000);
+    FocusBacklashNP[0].setStep(1);
+    FocusBacklashNP[0].setValue(0);
     //    IUFillNumber(&FocusBacklashN[0], "STEPS", "Steps", "%.f", -500., 500, 1., 0.);
     //    IUFillNumberVector(&FocusBacklashNP, FocusBacklashN, 1, getDeviceName(), "FOCUS_BACKLASH", "Backlash",
     //                       FOCUS_TAB, IP_RW, 0, IPS_IDLE);
 
     // Focuser min limit, read from the hardware
-    IUFillNumber(&FocusMinPosN[0], "FOCUS_MIN_VALUE", "Steps", "%.f", 0, 40000., 1., 0.);
-    IUFillNumberVector(&FocusMinPosNP, FocusMinPosN, 1, getDeviceName(), "FOCUS_MIN", "Min. Position",
-                       FOCUS_TAB, IP_RO, 0, IPS_IDLE);
+    // IUFillNumber(&FocusMinPosN[0], "FOCUS_MIN_VALUE", "Steps", "%.f", 0, 40000., 1., 0.);
+    // IUFillNumberVector(&FocusMinPosNP, FocusMinPosN, 1, getDeviceName(), "FOCUS_MIN", "Min. Position",
+    //                    FOCUS_TAB, IP_RO, 0, IPS_IDLE);
 
     return true;
 }
@@ -271,6 +274,8 @@ bool CelestronGPS::updateProperties()
             canAuxGuide = (atof(fwInfo.RAFirmware.c_str()) >= 6.12 && atof(fwInfo.DEFirmware.c_str()) >= 6.12);
             IUSaveText(&FirmwareT[FW_CAN_AUX], canAuxGuide ? "Mount" : "Time Guide");
             IUSaveText(&FirmwareT[FW_HAS_FOC], fwInfo.hasFocuser ? "True" : "False");
+
+            setMountType(fwInfo.isGem ? MOUNT_EQ_GEM : MOUNT_EQ_FORK);
 
             usePreciseCoords = (checkMinVersion(2.2, "usePreciseCoords"));
             // set the default switch index, will be updated from the mount if possible
@@ -347,13 +352,15 @@ bool CelestronGPS::updateProperties()
             IDSetSwitch(&CelestronTrackModeSP, nullptr);
         }
 
-        if (fwInfo.celestronTrackMode != CTM_ALTAZ)
-            cap |= TELESCOPE_HAS_TRACK_MODE;
-        else
-        {
-            TrackModeS[TRACK_SIDEREAL].s = ISS_ON;
-            LOG_WARN("Mount firmware does not support track mode.");
-        }
+        // JM 2025.09.19: Celestron Track Mode (EQ-N, EQ-S, ALTAZ) is not related
+        // to TELESCOPE_HAS_TRACK_MODE which is about track *rates* like Lunar, Solar, Sidereal..etc
+        // if (fwInfo.celestronTrackMode != CTM_ALTAZ)
+        //     cap |= TELESCOPE_HAS_TRACK_MODE;
+        // else
+        // {
+        //     TrackModeSP[TRACK_SIDEREAL].setState(ISS_ON);
+        //     LOG_WARN("Mount firmware does not support track mode.");
+        // }
 
         SetTelescopeCapability(cap, 9);
 
@@ -365,16 +372,16 @@ bool CelestronGPS::updateProperties()
         if (InitPark())
         {
             // If loading parking data is successful, we just set the default parking values.
-            SetAxis1ParkDefault(LocationN[LOCATION_LATITUDE].value >= 0 ? 0 : 180);
-            SetAxis2ParkDefault(LocationN[LOCATION_LATITUDE].value);
+            SetAxis1ParkDefault(LocationNP[LOCATION_LATITUDE].getValue() >= 0 ? 0 : 180);
+            SetAxis2ParkDefault(LocationNP[LOCATION_LATITUDE].getValue());
         }
         else
         {
             // Otherwise, we set all parking data to default in case no parking data is found.
-            SetAxis1Park(LocationN[LOCATION_LATITUDE].value >= 0 ? 0 : 180);
-            SetAxis2Park(LocationN[LOCATION_LATITUDE].value);
-            SetAxis1ParkDefault(LocationN[LOCATION_LATITUDE].value >= 0 ? 0 : 180);
-            SetAxis2ParkDefault(LocationN[LOCATION_LATITUDE].value);
+            SetAxis1Park(LocationNP[LOCATION_LATITUDE].getValue() >= 0 ? 0 : 180);
+            SetAxis2Park(LocationNP[LOCATION_LATITUDE].getValue());
+            SetAxis1ParkDefault(LocationNP[LOCATION_LATITUDE].getValue() >= 0 ? 0 : 180);
+            SetAxis2ParkDefault(LocationNP[LOCATION_LATITUDE].getValue());
         }
 
         // InitPark sets TrackState to IDLE or PARKED so this is the earliest we can
@@ -412,8 +419,7 @@ bool CelestronGPS::updateProperties()
             else
                 LOG_DEBUG("Unable to get guide rates from mount.");
 
-            defineProperty(&GuideNSNP);
-            defineProperty(&GuideWENP);
+            GI::updateProperties();
 
             LOG_INFO("Mount supports guiding.");
         }
@@ -441,8 +447,8 @@ bool CelestronGPS::updateProperties()
                 snprintf(isoDateTime, 32, "%04d-%02d-%02dT%02d:%02d:%02d", yy, mm, dd, hh, minute, ss);
                 snprintf(utcOffset, 8, "%4.2f", utc_offset);
 
-                IUSaveText(IUFindText(&TimeTP, "UTC"), isoDateTime);
-                IUSaveText(IUFindText(&TimeTP, "OFFSET"), utcOffset);
+                TimeTP[UTC].setText(isoDateTime);
+                TimeTP[OFFSET].setText(utcOffset);
 
                 defineProperty(&DSTSettingSP);
                 DSTSettingS[0].s = dst ? ISS_ON : ISS_OFF;
@@ -450,17 +456,17 @@ bool CelestronGPS::updateProperties()
                 LOGF_INFO("Mount UTC offset: %s. UTC time: %s. DST: %s", utcOffset, isoDateTime, dst ? "On" : "Off");
                 //LOGF_DEBUG("Mount UTC offset is %s. UTC time is %s", utcOffset, isoDateTime);
 
-                TimeTP.s = IPS_OK;
-                IDSetText(&TimeTP, nullptr);
+                TimeTP.setState(IPS_OK);
+                TimeTP.apply();
                 IDSetSwitch(&DSTSettingSP, nullptr);
             }
             double longitude, latitude;
             if (driver.get_location(&longitude, &latitude))
             {
-                LocationNP.np[LOCATION_LATITUDE].value = latitude;
-                LocationNP.np[LOCATION_LONGITUDE].value = longitude;
-                LocationNP.np[LOCATION_ELEVATION].value = 0;
-                LocationNP.s = IPS_OK;
+                LocationNP[LOCATION_LATITUDE].setValue(latitude);
+                LocationNP[LOCATION_LONGITUDE].setValue(longitude);
+                LocationNP[LOCATION_ELEVATION].setValue(0);
+                LocationNP.setState(IPS_OK);
                 LOGF_DEBUG("Mount latitude %8.4f longitude %8.4f", latitude, longitude);
             }
         }
@@ -491,17 +497,21 @@ bool CelestronGPS::updateProperties()
         //  handle the focuser
         if (fwInfo.hasFocuser)
         {
-            LOG_INFO("update focuser properties");
             //defineProperty(&FocusBacklashNP);
-            defineProperty(&FocusMinPosNP);
+            //defineProperty(&FocusMinPosNP);
+
             if (focusReadLimits())
             {
-                IUUpdateMinMax(&FocusAbsPosNP);
+                FocusAbsPosNP.updateMinMax();
 
-                IDSetNumber(&FocusMaxPosNP, nullptr);
-                IDSetNumber(&FocusMinPosNP, nullptr);
+                FocusMaxPosNP.apply();
+                // IDSetNumber(&FocusMinPosNP, nullptr);
                 // focuser move capability is only set if the focus limits are valid
                 FI::SetCapability(FOCUSER_CAN_ABS_MOVE | FOCUSER_CAN_REL_MOVE | FOCUSER_CAN_ABORT);
+                setDriverInterface(getDriverInterface() | FOCUSER_INTERFACE);
+                syncDriverInfo();
+
+                LOG_INFO("Auxiliary focuser is connected.");
             }
             if (!focuserIsCalibrated)
             {
@@ -515,12 +525,10 @@ bool CelestronGPS::updateProperties()
         INDI::Telescope::updateProperties();
 
         FI::updateProperties();
-        //deleteProperty(FocusBacklashNP.name);
-        deleteProperty(FocusMinPosNP.name);
+        //deleteProperty(FocusMinPosNP.name);
 
         //GUIDE Delete properties.
-        deleteProperty(GuideNSNP.name);
-        deleteProperty(GuideWENP.name);
+        GI::updateProperties();
 
         deleteProperty(GuideRateNP.name);
 
@@ -545,7 +553,7 @@ bool CelestronGPS::Goto(double ra, double dec)
     targetRA  = ra;
     targetDEC = dec;
 
-    if (EqNP.s == IPS_BUSY || MovementNSSP.s == IPS_BUSY || MovementWESP.s == IPS_BUSY)
+    if (EqNP.getState() == IPS_BUSY || MovementNSSP.getState() == IPS_BUSY || MovementWESP.getState() == IPS_BUSY)
     {
         driver.abort();
         // sleep for 500 mseconds
@@ -648,7 +656,7 @@ bool CelestronGPS::MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command)
     else
         move = (dir == DIRECTION_NORTH) ? CELESTRON_S : CELESTRON_N;
 
-    CELESTRON_SLEW_RATE rate = static_cast<CELESTRON_SLEW_RATE>(IUFindOnSwitchIndex(&SlewRateSP));
+    CELESTRON_SLEW_RATE rate = static_cast<CELESTRON_SLEW_RATE>(SlewRateSP.findOnSwitchIndex());
 
     switch (command)
     {
@@ -679,7 +687,7 @@ bool CelestronGPS::MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command)
 bool CelestronGPS::MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command)
 {
     CELESTRON_DIRECTION move = (dir == DIRECTION_WEST) ? CELESTRON_W : CELESTRON_E;
-    CELESTRON_SLEW_RATE rate = static_cast<CELESTRON_SLEW_RATE>(IUFindOnSwitchIndex(&SlewRateSP));
+    CELESTRON_SLEW_RATE rate = static_cast<CELESTRON_SLEW_RATE>(SlewRateSP.findOnSwitchIndex());
 
     switch (command)
     {
@@ -723,14 +731,14 @@ bool CelestronGPS::ReadScopeStatus()
     if (HasPierSide())
     {
         // read the pier side close to reading the Radec so they should match
-        char sop;
+        char sop = '?';
         char psc = 'u';
         if (driver.get_pier_side(&sop))
         {
             // manage version and hemisphere nonsense
             // HC versions less than 5.24 reverse the side of pier if the mount
             // is in the Southern hemisphere.  StarSense doesn't
-            if (LocationN[LOCATION_LATITUDE].value < 0)
+            if (LocationNP[LOCATION_LATITUDE].getValue() < 0)
             {
                 if (fwInfo.controllerVersion <= 5.24 && fwInfo.controllerVariant != ISSTARSENSE)
                 {
@@ -761,7 +769,7 @@ bool CelestronGPS::ReadScopeStatus()
         }
 
         LOGF_DEBUG("latitude %g, sop %c, PierSide %c",
-                   LocationN[LOCATION_LATITUDE].value,
+                   LocationNP[LOCATION_LATITUDE].getValue(),
                    sop, psc);
     }
 
@@ -951,18 +959,18 @@ bool CelestronGPS::ReadScopeStatus()
     if (fwInfo.hasFocuser)
     {
         // Check position
-        double lastPosition = FocusAbsPosN[0].value;
+        double lastPosition = FocusAbsPosNP[0].getValue();
 
-        int pos = driver.foc_position();
-        if (pos >= 0)
+        int absPos = focusTrue2Abs(driver.foc_position());
+        if (absPos >= 0)
         {
-            FocusAbsPosN[0].value = pos;
+            FocusAbsPosNP[0].setValue(absPos);
             // Only update if there is actual change
-            if (fabs(lastPosition - FocusAbsPosN[0].value) > 1)
-                IDSetNumber(&FocusAbsPosNP, nullptr);
+            if (fabs(lastPosition - FocusAbsPosNP[0].getValue()) > 1)
+                FocusAbsPosNP.apply();
         }
 
-        if (FocusAbsPosNP.s == IPS_BUSY || FocusRelPosNP.s == IPS_BUSY)
+        if (FocusAbsPosNP.getState() == IPS_BUSY || FocusRelPosNP.getState() == IPS_BUSY)
         {
             // The backlash handling is done here, if the move state
             // shows that a backlash move has been done then the final move needs to be started
@@ -973,17 +981,17 @@ bool CelestronGPS::ReadScopeStatus()
                 if (focusBacklashMove)
                 {
                     focusBacklashMove = false;
-                    if (driver.foc_move(focusPosition))
-                        LOGF_INFO("Focus final move %i", focusPosition);
+                    if (driver.foc_move(focusAbs2True(focusAbsPosition)))
+                        LOGF_INFO("Focus final move %i", focusAbsPosition);
                     else
                         LOG_INFO("Backlash move failed");
                 }
                 else
                 {
-                    FocusAbsPosNP.s = IPS_OK;
-                    FocusRelPosNP.s = IPS_OK;
-                    IDSetNumber(&FocusAbsPosNP, nullptr);
-                    IDSetNumber(&FocusRelPosNP, nullptr);
+                    FocusAbsPosNP.setState(IPS_OK);
+                    FocusRelPosNP.setState(IPS_OK);
+                    FocusAbsPosNP.apply();
+                    FocusRelPosNP.apply();
                     LOG_INFO("Focuser reached requested position.");
                 }
             }
@@ -1001,11 +1009,14 @@ bool CelestronGPS::Abort()
     driver.stop_motion(CELESTRON_E);
 
     //GUIDE Abort guide operations.
-    if (GuideNSNP.s == IPS_BUSY || GuideWENP.s == IPS_BUSY)
+    if (GuideNSNP.getState() == IPS_BUSY || GuideWENP.getState() == IPS_BUSY)
     {
-        GuideNSNP.s = GuideWENP.s = IPS_IDLE;
-        GuideNSN[0].value = GuideNSN[1].value = 0.0;
-        GuideWEN[0].value = GuideWEN[1].value = 0.0;
+        GuideNSNP.setState(IPS_IDLE);
+        GuideWENP.setState(IPS_IDLE);
+        GuideNSNP[0].setValue(0);
+        GuideNSNP[1].setValue(0);
+        GuideWENP[0].setValue(0);
+        GuideWENP[1].setValue(0);
 
         if (GuideNSTID)
         {
@@ -1020,8 +1031,8 @@ bool CelestronGPS::Abort()
         }
 
         LOG_INFO("Guide aborted.");
-        IDSetNumber(&GuideNSNP, nullptr);
-        IDSetNumber(&GuideWENP, nullptr);
+        GuideNSNP.apply();
+        GuideWENP.apply();
 
         return true;
     }
@@ -1218,6 +1229,13 @@ bool CelestronGPS::ISNewSwitch(const char *dev, const char *name, ISState *state
 
 bool CelestronGPS::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
 {
+    // Check focuser interface
+    if (FI::processNumber(dev, name, values, names, n))
+        return true;
+    // Check guider interface
+    if (GI::processNumber(dev, name, values, names, n))
+        return true;
+
     if (dev && std::string(dev) == getDeviceName())
     {
         // Guide Rate
@@ -1235,14 +1253,6 @@ bool CelestronGPS::ISNewNumber(const char *dev, const char *name, double values[
             driver.set_guide_rate(CELESTRON_AXIS::DEC_AXIS, grDec);
             LOG_WARN("Changing guide rates may require recalibration of guiding.");
             return true;
-        }
-
-        //GUIDE process Guider properties.
-        processGuiderProperties(name, values, names, n);
-
-        if (strstr(name, "FOCUS_"))
-        {
-            return FI::processNumber(dev, name, values, names, n);
         }
     }
 
@@ -1325,9 +1335,9 @@ void CelestronGPS::mountSim()
     else
         da_dec = FINE_SLEW_RATE * dt;
 
-    if (MovementNSSP.s == IPS_BUSY || MovementWESP.s == IPS_BUSY)
+    if (MovementNSSP.getState() == IPS_BUSY || MovementWESP.getState() == IPS_BUSY)
     {
-        int rate = IUFindOnSwitchIndex(&SlewRateSP);
+        int rate = SlewRateSP.findOnSwitchIndex();
 
         switch (rate)
         {
@@ -1352,12 +1362,12 @@ void CelestronGPS::mountSim()
                 break;
         }
 
-        switch (MovementNSSP.s)
+        switch (MovementNSSP.getState())
         {
             case IPS_BUSY:
-                if (MovementNSS[DIRECTION_NORTH].s == ISS_ON)
+                if (MovementNSSP[DIRECTION_NORTH].getState() == ISS_ON)
                     currentDEC += da_dec;
-                else if (MovementNSS[DIRECTION_SOUTH].s == ISS_ON)
+                else if (MovementNSSP[DIRECTION_SOUTH].getState() == ISS_ON)
                     currentDEC -= da_dec;
                 break;
 
@@ -1365,12 +1375,12 @@ void CelestronGPS::mountSim()
                 break;
         }
 
-        switch (MovementWESP.s)
+        switch (MovementWESP.getState())
         {
             case IPS_BUSY:
-                if (MovementWES[DIRECTION_WEST].s == ISS_ON)
+                if (MovementWESP[DIRECTION_WEST].getState() == ISS_ON)
                     currentRA += da_ra / 15.;
-                else if (MovementWES[DIRECTION_EAST].s == ISS_ON)
+                else if (MovementWESP[DIRECTION_EAST].getState() == ISS_ON)
                     currentRA -= da_ra / 15.;
                 break;
 
@@ -1386,7 +1396,7 @@ void CelestronGPS::mountSim()
         return;
     }
 
-    // Process per current state. We check the state of EQUATORIAL_COORDS and act acoordingly
+    // Process per current state. We check the state of EQUATORIAL_COORDS and act accordingly
     switch (TrackState)
     {
         case SCOPE_IDLE:
@@ -1570,12 +1580,12 @@ bool CelestronGPS::UnPark()
 
     //loadConfig(true, "TELESCOPE_TRACK_MODE");
     // Read Saved Track State from config file
-    for (int i = 0; i < TrackStateSP.nsp; i++)
-        IUGetConfigSwitch(getDeviceName(), TrackStateSP.name, TrackStateS[i].name, &(TrackStateS[i].s));
+    for (size_t i = 0; i < TrackStateSP.count(); i++)
+        IUGetConfigSwitch(getDeviceName(), TrackStateSP.getName(), TrackStateSP[i].getName(), &(TrackStateSP[i].s));
 
     // set the mount tracking state
-    LOGF_DEBUG("track state %s", IUFindOnSwitch(&TrackStateSP)->label);
-    SetTrackEnabled(IUFindOnSwitchIndex(&TrackStateSP) == TRACK_ON);
+    LOGF_DEBUG("track state %s", TrackStateSP.getLabel());
+    SetTrackEnabled(TrackStateSP.findOnSwitchIndex() == TRACK_ON);
 
     // reinit PEC
     if (driver.pecState >= PEC_STATE::PEC_AVAILABLE)
@@ -1638,7 +1648,7 @@ bool CelestronGPS::saveConfigItems(FILE *fp)
     IUSaveConfigSwitch(fp, &CelestronTrackModeSP);
     IUSaveConfigSwitch(fp, &DSTSettingSP);
 
-    IUSaveConfigNumber(fp, &FocusMinPosNP);
+    //  IUSaveConfigNumber(fp, &FocusMinPosNP);
 
     return true;
 }
@@ -1693,19 +1703,16 @@ IPState CelestronGPS::Guide(CELESTRON_DIRECTION dirn, uint32_t ms)
 {
     // set up direction properties
     char dc = 'x';
-    ISwitchVectorProperty *moveSP = &MovementNSSP;
-    ISwitch moveS = MovementNSS[0];
     int* guideTID = &GuideNSTID;
     int* ticks = &ticksNS;
     uint8_t rate = 50;
+    int index = 0;
 
     // set up pointers to the various things needed
     switch (dirn)
     {
         case CELESTRON_N:
             dc = 'N';
-            moveSP = &MovementNSSP;
-            moveS = MovementNSS[0];
             guideTID = &GuideNSTID;
             ticks = &ticksNS;
             /* Scale guide rates to uint8 in [0..100] for sending to telescopoe, see  CelestronDriver::send_pulse() */
@@ -1713,17 +1720,14 @@ IPState CelestronGPS::Guide(CELESTRON_DIRECTION dirn, uint32_t ms)
             break;
         case CELESTRON_S:
             dc = 'S';
-            moveSP = &MovementNSSP;
-            moveS = MovementNSS[1];
             guideTID = &GuideNSTID;
             ticks = &ticksNS;
+            index = 1;
             /* Scale guide rates to uint8 in [0..100] for sending to telescopoe, see  CelestronDriver::send_pulse() */
             rate = guideRateDec = static_cast<uint8_t>(GuideRateN[AXIS_DE].value * 100.0);
             break;
         case CELESTRON_E:
             dc = 'E';
-            moveSP = &MovementWESP;
-            moveS = MovementWES[1];
             guideTID = &GuideWETID;
             ticks = &ticksWE;
             /* Scale guide rates to uint8 in [0..100] for sending to telescopoe, see  CelestronDriver::send_pulse() */
@@ -1731,10 +1735,9 @@ IPState CelestronGPS::Guide(CELESTRON_DIRECTION dirn, uint32_t ms)
             break;
         case CELESTRON_W:
             dc = 'W';
-            moveSP = &MovementWESP;
-            moveS = MovementWES[0];
             guideTID = &GuideWETID;
             ticks = &ticksWE;
+            index = 1;
             /* Scale guide rates to uint8 in [0..100] for sending to telescopoe, see  CelestronDriver::send_pulse() */
             rate = guideRateRa = static_cast<uint8_t>(GuideRateN[AXIS_RA].value * 100.0);
             break;
@@ -1742,14 +1745,16 @@ IPState CelestronGPS::Guide(CELESTRON_DIRECTION dirn, uint32_t ms)
 
     LOGF_DEBUG("GUIDE CMD: %c %u ms, %s guide", dc, ms, canAuxGuide ? "Aux" : "Time");
 
-    if (!canAuxGuide && (MovementNSSP.s == IPS_BUSY || MovementWESP.s == IPS_BUSY))
+    if (!canAuxGuide && (MovementNSSP.getState() == IPS_BUSY || MovementWESP.getState() == IPS_BUSY))
     {
         LOG_ERROR("Cannot guide while moving.");
         return IPS_ALERT;
     }
 
+    auto directionProperty = dirn > CELESTRON_S ? MovementWESP : MovementNSSP;
+
     // If already moving (no pulse command), then stop movement
-    if (moveSP->s == IPS_BUSY)
+    if (directionProperty.getState() == IPS_BUSY)
     {
         LOG_DEBUG("Already moving - stop");
         driver.stop_motion(dirn);
@@ -1779,7 +1784,7 @@ IPState CelestronGPS::Guide(CELESTRON_DIRECTION dirn, uint32_t ms)
     }
     else
     {
-        moveS.s = ISS_ON;
+        directionProperty[index].setState(ISS_ON);
         // start movement at HC button rate 1
         if (!driver.start_motion(dirn, CELESTRON_SLEW_RATE::SR_1))
         {
@@ -1790,9 +1795,9 @@ IPState CelestronGPS::Guide(CELESTRON_DIRECTION dirn, uint32_t ms)
     }
 
     // Set slew to guiding
-    IUResetSwitch(&SlewRateSP);
-    SlewRateS[SLEW_GUIDE].s = ISS_ON;
-    IDSetSwitch(&SlewRateSP, nullptr);
+    SlewRateSP.reset();
+    SlewRateSP[SLEW_GUIDE].setState(ISS_ON);
+    SlewRateSP.apply();
     // start the guide timeout timer
     AddGuideTimer(dirn, static_cast<int>(ms));
     return IPS_BUSY;
@@ -1853,7 +1858,7 @@ void CelestronGPS::guideTimer(CELESTRON_DIRECTION dirn)
     {
         if (driver.get_pulse_status(dirn))
         {
-            // curent move not finished, add some more time
+            // current move not finished, add some more time
             AddGuideTimer(dirn, 100);
             return;
         }
@@ -1878,23 +1883,23 @@ void CelestronGPS::guideTimer(CELESTRON_DIRECTION dirn)
     {
         case CELESTRON_N:
         case CELESTRON_S:
-            IUResetSwitch(&MovementNSSP);
-            IDSetSwitch(&MovementNSSP, nullptr);
-            GuideNSNP.np[0].value = 0;
-            GuideNSNP.np[1].value = 0;
-            GuideNSNP.s           = IPS_IDLE;
-            GuideNSTID            = 0;
-            IDSetNumber(&GuideNSNP, nullptr);
+            MovementNSSP.reset();
+            MovementNSSP.apply();
+            GuideNSNP[0].setValue(0);
+            GuideNSNP[1].setValue(0);
+            GuideNSNP.setState(IPS_IDLE);
+            GuideNSTID = 0;
+            GuideNSNP.apply();
             break;
         case CELESTRON_E:
         case CELESTRON_W:
-            IUResetSwitch(&MovementWESP);
-            IDSetSwitch(&MovementWESP, nullptr);
-            GuideWENP.np[0].value = 0;
-            GuideWENP.np[1].value = 0;
-            GuideWENP.s           = IPS_IDLE;
-            GuideWETID            = 0;
-            IDSetNumber(&GuideWENP, nullptr);
+            MovementWESP.reset();
+            MovementWESP.apply();
+            GuideWENP[0].setValue(0);
+            GuideWENP[1].setValue(0);
+            GuideWENP.setState(IPS_IDLE);
+            GuideWETID = 0;
+            GuideWENP.apply();
             break;
     }
     LOGF_DEBUG("Guide %c finished", "NSWE"[dirn]);
@@ -2022,7 +2027,7 @@ bool CelestronGPS::savePecData()
 // focus control
 IPState CelestronGPS::MoveAbsFocuser(uint32_t targetTicks)
 {
-    uint32_t position = targetTicks;
+    uint32_t absPosition = targetTicks;
 
     if (!focuserIsCalibrated)
     {
@@ -2031,19 +2036,19 @@ IPState CelestronGPS::MoveAbsFocuser(uint32_t targetTicks)
     }
 
     // implement backlash
-    int delta = static_cast<int>(targetTicks - FocusAbsPosN[0].value);
+    int delta = static_cast<int>(targetTicks - FocusAbsPosNP[0].getValue());
 
-    if ((FocusBacklashN[0].value < 0 && delta > 0) ||
-            (FocusBacklashN[0].value > 0 && delta < 0))
+    if ((FocusBacklashNP[0].getValue() < 0 && delta > 0) ||
+            (FocusBacklashNP[0].getValue() > 0 && delta < 0))
     {
         focusBacklashMove = true;
-        focusPosition = position;
-        position -= FocusBacklashN[0].value;
+        focusAbsPosition = absPosition;
+        absPosition -= FocusBacklashNP[0].getValue();
     }
 
-    LOGF_INFO("Focus %s move %d", focusBacklashMove ? "backlash" : "direct", position);
+    LOGF_INFO("Focus %s move %d", focusBacklashMove ? "backlash" : "direct", absPosition);
 
-    if(!driver.foc_move(position))
+    if(!driver.foc_move(focusAbs2True(absPosition)))
         return IPS_ALERT;
 
     return IPS_BUSY;
@@ -2054,12 +2059,12 @@ IPState CelestronGPS::MoveRelFocuser(INDI::FocuserInterface::FocusDirection dir,
     uint32_t newPosition = 0;
 
     if (dir == FOCUS_INWARD)
-        newPosition = static_cast<uint32_t>(FocusAbsPosN[0].value) - ticks;
+        newPosition = static_cast<uint32_t>(FocusAbsPosNP[0].getValue()) - ticks;
     else
-        newPosition = static_cast<uint32_t>(FocusAbsPosN[0].value) + ticks;
+        newPosition = static_cast<uint32_t>(FocusAbsPosNP[0].getValue()) + ticks;
 
     // Clamp
-    newPosition = std::min(static_cast<uint32_t>(FocusAbsPosN[0].max), newPosition);
+    newPosition = std::min(static_cast<uint32_t>(FocusAbsPosNP[0].getMax()), newPosition);
     return MoveAbsFocuser(newPosition);
 }
 
@@ -2071,21 +2076,23 @@ bool CelestronGPS::AbortFocuser()
 // read the focuser limits from the hardware
 bool CelestronGPS::focusReadLimits()
 {
-    int low, high;
+    int low = 0, high = 0;
     bool valid = driver.foc_limits(&low, &high);
 
-    FocusAbsPosN[0].max = high;
-    FocusAbsPosN[0].min = low;
-    FocusAbsPosNP.s = IPS_OK;
-    IUUpdateMinMax(&FocusAbsPosNP);
+    focusTrueMax = high;
+    focusTrueMin = low;
 
-    FocusMaxPosN[0].value = high;
-    FocusMaxPosNP.s = IPS_OK;
-    IDSetNumber(&FocusMaxPosNP, nullptr);
+    FocusAbsPosNP[0].setMax(focusTrue2Abs(focusTrueMin));
+    FocusMaxPosNP[0].setValue(focusTrue2Abs(focusTrueMin));
+    FocusAbsPosNP.setState(IPS_OK);
+    FocusAbsPosNP.updateMinMax();
 
-    FocusMinPosN[0].value = low;
-    FocusMinPosNP.s = IPS_OK;
-    IDSetNumber(&FocusMinPosNP, nullptr);
+    FocusMaxPosNP.setState(IPS_OK);
+    FocusMaxPosNP.apply();
+
+    // FocusMinPosNP[0].setValue(low);
+    // FocusMinPosNP.s = IPS_OK;
+    // IDSetNumber(&FocusMinPosNP, nullptr);
 
     focuserIsCalibrated = valid;
 

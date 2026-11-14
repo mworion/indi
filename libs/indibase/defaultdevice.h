@@ -18,17 +18,21 @@
 
 #pragma once
 
-#include "basedevice.h"
+#include "parentdevice.h"
 #include "indidriver.h"
 #include "indilogger.h"
 
 #include <stdint.h>
+#include <any>
+#include <string>
+#include <functional>
 
 namespace Connection
 {
 class Interface;
 class Serial;
 class TCP;
+class I2C;
 }
 /**
  * @brief COMMUNICATION_TAB Where all the properties required to connect/disconnect from
@@ -115,7 +119,7 @@ namespace INDI
 {
 
 class DefaultDevicePrivate;
-class DefaultDevice : public BaseDevice
+class DefaultDevice : public ParentDevice
 {
         DECLARE_PRIVATE(DefaultDevice)
 
@@ -139,6 +143,9 @@ class DefaultDevice : public BaseDevice
         /** \brief Add Polling period control to the driver */
         void addPollPeriodControl();
 
+        /** \brief Add Nickname text property to the driver */
+        void addNicknameControl();
+
     public:
         /** \brief Set all properties to IDLE state */
         void resetProperties();
@@ -149,7 +156,8 @@ class DefaultDevice : public BaseDevice
          * save configuration files.
          * \param nvp The number vector property to be defined
          */
-        void defineNumber(INumberVectorProperty *nvp) __attribute__((deprecated));
+        INDI_DEPRECATED("Use defineProperty(INDI::Property &).")
+        void defineNumber(INumberVectorProperty *nvp);
         void defineProperty(INumberVectorProperty *property);
 
         /**
@@ -158,7 +166,8 @@ class DefaultDevice : public BaseDevice
          * configuration files.
          * \param tvp The text vector property to be defined
          */
-        void defineText(ITextVectorProperty *tvp) __attribute__((deprecated));
+        INDI_DEPRECATED("Use defineProperty(INDI::Property &).")
+        void defineText(ITextVectorProperty *tvp);
         void defineProperty(ITextVectorProperty *property);
 
         /**
@@ -167,7 +176,8 @@ class DefaultDevice : public BaseDevice
          * configuration files.
          * \param svp The switch vector property to be defined
          */
-        void defineSwitch(ISwitchVectorProperty *svp) __attribute__((deprecated));
+        INDI_DEPRECATED("Use defineProperty(INDI::Property &).")
+        void defineSwitch(ISwitchVectorProperty *svp);
         void defineProperty(ISwitchVectorProperty *property);
 
         /**
@@ -176,7 +186,8 @@ class DefaultDevice : public BaseDevice
          * configuration files.
          * \param lvp The light vector property to be defined
          */
-        void defineLight(ILightVectorProperty *lvp) __attribute__((deprecated));
+        INDI_DEPRECATED("Use defineProperty(INDI::Property &).")
+        void defineLight(ILightVectorProperty *lvp);
         void defineProperty(ILightVectorProperty *property);
 
         /**
@@ -185,7 +196,8 @@ class DefaultDevice : public BaseDevice
          * save configuration files.
          * \param bvp The BLOB vector property to be defined
          */
-        void defineBLOB(IBLOBVectorProperty *bvp) __attribute__((deprecated));
+        INDI_DEPRECATED("Use defineProperty(INDI::Property &).")
+        void defineBLOB(IBLOBVectorProperty *bvp);
         void defineProperty(IBLOBVectorProperty *property);
 
         void defineProperty(INDI::Property &property);
@@ -194,6 +206,14 @@ class DefaultDevice : public BaseDevice
          * \param propertyName name of property to be deleted.
          */
         virtual bool deleteProperty(const char *propertyName);
+
+        /**
+         * @brief deleteProperty Delete a property and unregister it. It will also be deleted from all clients.
+         * @param property Property to be deleted.
+         * @return True if successful, false otherwise.
+         * @note This is a convenience function that internally calls deleteProperty with the property name.
+         */
+        bool deleteProperty(INDI::Property &property);
 
     public:
         /**
@@ -294,22 +314,99 @@ class DefaultDevice : public BaseDevice
         virtual bool ISSnoopDevice(XMLEle *root);
 
         /**
+         * @brief Generic convenience function to update a property element as if by client request,
+         *        simulating an ISNew... call.
+         *
+         * This function determines the type of the property (Switch, Number, Text) and
+         * attempts to cast the std::any value to the appropriate type before calling
+         * the corresponding ISNew... function.
+         *
+         * @param property Reference to the INDI::Property object to be updated.
+         * @param elementName The name of the element within the property to update.
+         * @param value The new value for the element, wrapped in std::any.
+         *              - For Switch properties: std::any should contain an ISState.
+         *              - For Number properties: std::any should contain a double or int.
+         *              - For Text properties: std::any should contain a const char* or std::string.
+         * @return True if the update was successfully dispatched via the appropriate ISNew...
+         *         function, false otherwise (e.g., type mismatch, element not found,
+         *         property not found).
+         */
+        bool ISNewProperty(INDI::Property &property, const std::string &elementName, const std::any &value);
+
+        /**
+         * @brief Generic helper function to update an INDI property based on an external operation.
+         *
+         * This function encapsulates the common pattern of:
+         * 1. Checking if a property's values have actually changed.
+         * 2. Executing an external update function (e.g., communicating with hardware).
+         * 3. Updating the INDI property's internal state and applying changes if the external update was successful.
+         * 4. Optionally saving the configuration.
+         *
+         * @tparam PropertyType The type of the INDI property (e.g., INDI::PropertyNumber, INDI::PropertyText, INDI::PropertySwitch).
+         * @tparam ValueType The type of the array elements (e.g., double, char*, ISState).
+         * @param property The INDI property to update.
+         * @param values The array of new values for the property elements.
+         * @param names The array of names corresponding to the values.
+         * @param n The number of elements in the values and names arrays.
+         * @param updater A std::function that performs the actual device update. It should return true on success, false on failure.
+         * @param saveConfig If true, save the property's configuration after a successful update. Defaults to false.
+         * @return True if the property was updated and the external operation was successful, false otherwise.
+         */
+        template<typename PropertyType, typename ValueType>
+        bool updateProperty(PropertyType& property, ValueType* values, char* names[], int n,
+                            std::function<bool()> updater, bool saveConfig = false)
+        {
+            if (property.isUpdated(values, names, n))
+            {
+                if (updater())
+                {
+                    property.update(values, names, n);
+                    property.setState(IPS_OK);
+                    if (saveConfig)
+                        this->saveConfig(property);
+                    property.apply();
+                    return true;
+                }
+                else
+                {
+                    property.setState(IPS_ALERT);
+                    property.apply();
+                    return false;
+                }
+            }
+            else
+            {
+                // If nothing is updated, just accept as-is
+                property.setState(IPS_OK);
+                property.apply();
+                return false;
+            }
+        }
+
+        /**
          * @return getInterface Return the interface declared by the driver.
          */
-        virtual uint16_t getDriverInterface() override;
+        uint32_t getDriverInterface() const;
 
         /**
          * @brief setInterface Set driver interface. By default the driver interface is set to GENERAL_DEVICE.
          * You may send an ORed list of DeviceInterface values.
          * @param value ORed list of DeviceInterface values.
          * @warning This only updates the internal driver interface property and does not send it to the
-         * client. To synchronize the client, use syncDriverInfo funciton.
+         * client. To synchronize the client, use syncDriverInfo function.
          */
-        void setDriverInterface(uint16_t value);
+        void setDriverInterface(uint32_t value);
+
+    public:
+        /** @brief Add a device to the watch list.
+         *
+         *  A driver may select to receive notifications of a specific other device.
+         */
+        void watchDevice(const char *deviceName, const std::function<void (INDI::BaseDevice)> &callback);
 
     protected:
         /**
-         * @brief setDynamicPropertiesBehavior controls handling of dynamic properties. Dyanmic properties
+         * @brief setDynamicPropertiesBehavior controls handling of dynamic properties. Dynamic properties
          * are those generated from an external skeleton XML file. By default all properties, including
          * dynamic properties, are defined to the client in ISGetProperties(). Furthermore, when
          * űdeleteProperty(properyName) is called, the dynamic property is deleted by default, and can only
@@ -336,6 +433,15 @@ class DefaultDevice : public BaseDevice
         virtual bool loadConfig(bool silent = false, const char *property = nullptr);
 
         /**
+         * @brief Load property config from the configuration file. If the property configuration is successfully parsed, the corresponding ISNewXXX
+         * is called with the values parsed from the config file.
+         * @param property Property to load configuration for.
+         * @return True if successful, false otherwise.
+         * @note This is a convenience function that calls loadConfig(true, property->getName())
+         */
+        bool loadConfig(INDI::Property &property);
+
+        /**
          * \brief Save the current properties in a configuration file
          * \param silent if true, don't report any error or notification messages.
          * \param property Name of specific property to save while leaving all others properties in the
@@ -343,6 +449,14 @@ class DefaultDevice : public BaseDevice
          * \return True if successful, false otherwise.
          */
         virtual bool saveConfig(bool silent = false, const char *property = nullptr);
+
+        /**
+         * @brief Save a property in the configuration file
+         * @param property Property to save in configuration file.
+         * @return True if successful, false otherwise.
+         * @note This is a convenience function that calls saveConfig(true, property->getName())
+         */
+        bool saveConfig(INDI::Property &property);
 
         /**
          * @brief purgeConfig Remove config file from disk.
@@ -414,8 +528,8 @@ class DefaultDevice : public BaseDevice
         bool isSimulation() const;
 
         /**
-         * \brief Initilize properties initial state and value. The child class must implement this function.
-         * \return True if initilization is successful, false otherwise.
+         * \brief Initialize properties initial state and value. The child class must implement this function.
+         * \return True if initialization is successful, false otherwise.
          */
         virtual bool initProperties();
 
@@ -522,19 +636,63 @@ class DefaultDevice : public BaseDevice
         /** @brief syncDriverInfo sends the current driver information to the client. */
         void syncDriverInfo();
 
-
         /** \return Default name of the device. */
         virtual const char *getDefaultName() = 0;
+
+        /** @brief Set the device nickname
+         *  @param nick new device nickname
+         *
+         *  When a nickname is set, the full device name will be "DefaultName
+         *  Nickname". Setting the nickname will also set the device name. If
+         *  nick is already prefixed with the defaultname, it will be removed.
+         */
+        void setDeviceNickname(const char *nick);
+
+        /** \return Nickname for the device */
+        const char *getDeviceNickname();
+
+        /** @brief Lookup device nickname for an identifier
+         *  @param identifier The id to look up
+         *  @param device The device name for the identifier. If null or empty
+         *         string, will look up for current device's default name.
+         *
+         *  Returns the nickname if found, if not found returns nullptr.
+         */
+        const char *lookupDeviceNicknameFromId(const char *identifier, const char *device = nullptr);
+
+        /** @brief Set device nickname based on an identifier
+         *  @param identifier The id to look up
+         */
+        bool setDeviceNicknameFromId(const char *identifier);
+
+        void saveNicknameId(const char *nickname, const char *identifier);
+
+        /**
+         * \brief Inform driver that the nickname has been set.
+         *
+         * Reimplement this function to get notified on nickname update to save with saveNicknameId().
+         * To just read the nickname if already set, use getDeviceNickname();
+         * \param nickname The nickname. Emptystring or nullptr means no nickname set.
+         */
+        virtual void nicknameSet(const char *nickname);
 
     private:
         // Connection Plugins
         friend class Connection::Serial;
         friend class Connection::TCP;
+        friend class Connection::I2C;
         friend class FilterInterface;
         friend class FocuserInterface;
+        friend class WeatherInterface;
+        friend class LightBoxInterface;
+        friend class OutputInterface;
+        friend class InputInterface;
+        friend class PowerInterface;
+        friend class IMUInterface;
+        friend class PACInterface;
 
     protected:
-        DefaultDevice(DefaultDevicePrivate &dd);
+        DefaultDevice(const std::shared_ptr<DefaultDevicePrivate> &dd);
 };
 
 }

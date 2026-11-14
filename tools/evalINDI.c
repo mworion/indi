@@ -63,7 +63,7 @@ static int directfd = -1;             /* direct filedes to server, if >= 0 */
 static int verbose;                   /* more tracing */
 static int eflag;                     /* print each updated expression value*/
 static int fflag;                     /* print final expression value */
-static int iflag;                     /* read expresion from stdin */
+static int iflag;                     /* read expression from stdin */
 static int oflag;                     /* print operands as they change */
 static int wflag;                     /* wait for expression to be true */
 static int bflag;                     /* beep when true */
@@ -219,9 +219,9 @@ static void usage()
     fprintf(stderr, "   -o   : print operands as they change\n");
     fprintf(stderr, "   -p p : alternate port, default is %d\n", INDIPORT);
     fprintf(stderr, "   -t t : max secs to wait, 0 is forever, default is %d\n", TIMEOUT);
-    fprintf(stderr, "   -v   : verbose (cummulative)\n");
+    fprintf(stderr, "   -v   : verbose (cumulative)\n");
     fprintf(stderr, "   -w   : wait for expression to evaluate as true\n");
-    fprintf(stderr, "[exp] is an arith expression built from the following operators and functons:\n");
+    fprintf(stderr, "[exp] is an arith expression built from the following operators and functions:\n");
     fprintf(stderr, "     ! + - * / && || > >= == != < <=\n");
     fprintf(stderr, "     pi sin(rad) cos(rad) tan(rad) asin(x) acos(x) atan(x) atan2(y,x) abs(x)\n");
     fprintf(stderr, "     degrad(deg) raddeg(rad) floor(x) log(x) log10(x) exp(x) sqrt(x) pow(x,exp)\n");
@@ -375,7 +375,7 @@ static int setOp(XMLEle *root)
             char *et = tagXMLEle(ep);
             if (!strcmp(et, "defNumber") || !strcmp(et, "oneNumber"))
             {
-                sprintf(prop, "%s.%s.%s", d, n, findXMLAttValu(ep, "name"));
+                snprintf(prop, sizeof(prop), "%s.%s.%s", d, n, findXMLAttValu(ep, "name"));
                 v = atof(pcdataXMLEle(ep));
                 if (setOperand(prop, v) == 0)
                 {
@@ -394,7 +394,7 @@ static int setOp(XMLEle *root)
 
             if (!strcmp(et, "defSwitch") || !strcmp(et, "oneSwitch"))
             {
-                sprintf(prop, "%s.%s.%s", d, n, findXMLAttValu(ep, "name"));
+                snprintf(prop, sizeof(prop), "%s.%s.%s", d, n, findXMLAttValu(ep, "name"));
                 v = (double)!strncmp(pcdataXMLEle(ep), "On", 2);
                 if (setOperand(prop, v) == 0)
                 {
@@ -412,7 +412,7 @@ static int setOp(XMLEle *root)
             char *et = tagXMLEle(ep);
             if (!strcmp(et, "defLight") || !strcmp(et, "oneLight"))
             {
-                sprintf(prop, "%s.%s.%s", d, n, findXMLAttValu(ep, "name"));
+                snprintf(prop, sizeof(prop), "%s.%s.%s", d, n, findXMLAttValu(ep, "name"));
                 v = (double)pstatestr(pcdataXMLEle(ep));
                 if (setOperand(prop, v) == 0)
                 {
@@ -428,7 +428,7 @@ static int setOp(XMLEle *root)
     t = (char *)findXMLAttValu(root, "state");
     if (t[0])
     {
-        sprintf(prop, "%s.%s._STATE", d, n);
+        snprintf(prop, sizeof(prop), "%s.%s._STATE", d, n);
         v = (double)pstatestr(t);
         if (setOperand(prop, v) == 0)
         {
@@ -440,7 +440,7 @@ static int setOp(XMLEle *root)
     t = (char *)findXMLAttValu(root, "timestamp");
     if (t[0])
     {
-        sprintf(prop, "%s.%s._TS", d, n);
+        snprintf(prop, sizeof(prop), "%s.%s._TS", d, n);
         v = (double)timestampINDI(t);
         if (setOperand(prop, v) == 0)
         {

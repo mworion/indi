@@ -25,10 +25,16 @@
 #include "indistandardproperty.h"
 #include "connectionplugins/connectionserial.h"
 
+#include "indipropertyswitch.h"
+#include "indipropertytext.h"
+#include "indipropertynumber.h"
+#include "indipropertyblob.h"
+
+#include <algorithm>
+#include <assert.h>
 #include <cstdlib>
 #include <cstring>
-#include <assert.h>
-#include <algorithm>
+#include <pwd.h>
 
 const char *COMMUNICATION_TAB = "Communication";
 const char *MAIN_CONTROL_TAB  = "Main Control";
@@ -100,6 +106,46 @@ extern "C"
 
 } // extern "C"
 
+
+// For drivers, indiproperty need access to ID/IU functions
+extern void (*WeakIDSetTextVA)(const ITextVectorProperty *, const char *, va_list);
+extern void (*WeakIDDefTextVA)(const ITextVectorProperty *, const char *, va_list);
+extern void (*WeakIDSetNumberVA)(const INumberVectorProperty *, const char *, va_list);
+extern void (*WeakIDDefNumberVA)(const INumberVectorProperty *, const char *, va_list);
+extern void (*WeakIDSetSwitchVA)(const ISwitchVectorProperty *, const char *, va_list);
+extern void (*WeakIDDefSwitchVA)(const ISwitchVectorProperty *, const char *, va_list);
+extern void (*WeakIDSetLightVA)(const ILightVectorProperty *, const char *, va_list);
+extern void (*WeakIDDefLightVA)(const ILightVectorProperty *, const char *, va_list);
+extern void (*WeakIDSetBLOBVA)(const IBLOBVectorProperty *, const char *, va_list);
+extern void (*WeakIDDefBLOBVA)(const IBLOBVectorProperty *, const char *, va_list);
+extern int (*WeakIUUpdateText)(ITextVectorProperty *, char *[], char *[], int);
+extern int (*WeakIUUpdateNumber)(INumberVectorProperty *, double[], char *[], int n);
+extern int (*WeakIUUpdateSwitch)(ISwitchVectorProperty *, ISState *, char *[], int n);
+extern int (*WeakIUUpdateBLOB)(IBLOBVectorProperty *, int [], int [], char *[], char *[], char *[], int n);
+extern void (*WeakIUUpdateMinMax)(const INumberVectorProperty *);
+
+static struct WeakIDLoader
+{
+    WeakIDLoader()
+    {
+        WeakIDSetTextVA = IDSetTextVA;
+        WeakIDDefTextVA = IDDefTextVA;
+        WeakIDSetNumberVA = IDSetNumberVA;
+        WeakIDDefNumberVA = IDDefNumberVA;
+        WeakIDSetSwitchVA = IDSetSwitchVA;
+        WeakIDDefSwitchVA = IDDefSwitchVA;
+        WeakIDSetLightVA = IDSetLightVA;
+        WeakIDDefLightVA = IDDefLightVA;
+        WeakIDSetBLOBVA = IDSetBLOBVA;
+        WeakIDDefBLOBVA = IDDefBLOBVA;
+        WeakIUUpdateText = IUUpdateText;
+        WeakIUUpdateNumber = IUUpdateNumber;
+        WeakIUUpdateSwitch = IUUpdateSwitch;
+        WeakIUUpdateBLOB = IUUpdateBLOB;
+        WeakIUUpdateMinMax = IUUpdateMinMax;
+    }
+} weakLoader;
+
 void timerfunc(void *t)
 {
     INDI::DefaultDevice *devPtr = static_cast<INDI::DefaultDevice *>(t);
@@ -117,6 +163,263 @@ void timerfunc(void *t)
 namespace INDI
 {
 
+namespace
+{
+
+// trim from start (in place)
+static inline void ltrim(std::string &s)
+{
+    if (s.empty())
+        return;
+
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch)
+    {
+        return !std::isspace(ch);
+    }));
+}
+
+// trim from end (in place)
+static inline void rtrim(std::string &s)
+{
+    if (s.empty())
+        return;
+
+    s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char ch)
+    {
+        return !std::isspace(ch);
+    }).base(), s.end());
+}
+
+// trim from both ends (in place)
+static void trim(std::string &s)
+{
+    ltrim(s);
+    rtrim(s);
+}
+
+static std::string GetHomeDirectory()
+{
+    // Check first the HOME environmental variable
+    const char *HomeDir = getenv("HOME");
+
+    // ...otherwise get the home directory of the current user.
+    if (!HomeDir)
+    {
+        HomeDir = getpwuid(getuid())->pw_dir;
+    }
+    return (HomeDir ? std::string(HomeDir) : "");
+}
+
+} // namespace
+
+/**
+ * Nicknames are stored in an xml-format NICKNAME_FILE in a format like the below.
+ * Nicknames are assoicated with a driver and stable device identifier.
+ *
+ * The device identifier must be stable across boots and not dependent on which
+ * port the device is plugged into. Usually this will be some form of serial
+ * number of the device, but specifics are left up to each driver.
+ *
+ * Since each identifier is per-driver, devices from different drivers can
+ * share the same nickname. The INDI framework must not try to interpret the
+ * identifier, only compare for equality.
+ *
+ * Since the device-name can't be changed once the driver is running, changes
+ * to nicknames can only take effect at the next INDI startup.
+ *
+ * The NicknameTP should be added with addNicknameControl().
+ *
+ * <INDINicknames>
+ *   <device name="AcmeFocuser">
+ *     <nickname identifier="SN123">MainScope</nickname>
+ *     <nickname identifier="SN456">GuideScope</nickname>
+ *   </device>
+ *   <device name="AcmeDustCap">
+ *     <nickname identifier="CAP-1-2-3">MainScope</nickname>
+ *   </device>
+ * </INDINicknames>
+ */
+
+#define NICKNAME_FILE "/.indi/Nicknames.xml"
+#define NICK_TAG_ROOT "INDINicknames"
+#define NICK_TAG_DEVICE "device"
+#define NICK_ATTR_NAME "name"
+#define NICK_TAG_ENTRY "nickname"
+#define NICK_ATTR_ID "identifier"
+
+int DefaultDevicePrivate::loadINDINicknamesXML(const char *devicename)
+{
+    const std::string filename = GetHomeDirectory() + NICKNAME_FILE;
+    nicknameMap.clear();
+
+    LilXML *lp = newLilXML();
+    XMLEle *NickXmlRoot = nullptr;
+    XMLEle *devicexml = nullptr;
+    XMLEle *nickxml = nullptr;
+    static char errmsg[XML_ERROR_SIZE];
+    memset(errmsg, 0, sizeof(errmsg)); // Clear anything from prior run
+    FILE *fp = fopen(filename.c_str(), "r");
+    if (fp)
+    {
+        NickXmlRoot = readXMLFile(fp, lp, errmsg);
+        fclose(fp);
+    }
+    delLilXML(lp);
+
+    // NickXmlRoot is the root root tag, it's name is INDINickname
+    // iterating that one gives the other tags
+    if (!NickXmlRoot || errmsg[0])
+        return 1;
+
+    if (strcmp(tagXMLEle(NickXmlRoot), NICK_TAG_ROOT) != 0)
+    {
+        delXMLEle(NickXmlRoot);
+        return 1;
+    }
+
+    // children of top level INDINicknames
+    // This should be <device>
+    devicexml = nextXMLEle(NickXmlRoot, 1);
+    // find <device name= matching this driver
+    for (; devicexml != NULL; devicexml = nextXMLEle(NickXmlRoot, 0))
+    {
+        // Skip non <device> tags
+        if (strcmp(tagXMLEle(devicexml), NICK_TAG_DEVICE))
+        {
+            printf("Skipping XML Non-Device: %s\n", tagXMLEle(devicexml));
+            continue;
+        }
+
+        // find name= attr
+        const char *devname = findXMLAttValu(devicexml, NICK_ATTR_NAME);
+        // skip other drivers
+        if (devname && strcmp(devname, devicename) == 0)
+        {
+            // Found <device name= matching the current driver
+            nickxml = nextXMLEle(devicexml, 1);
+            break;
+        }
+    }
+
+    for (; nickxml != NULL; nickxml = nextXMLEle(devicexml, 0))
+    {
+        // Skip non <nickname> tags
+        if (strcmp(tagXMLEle(nickxml), NICK_TAG_ENTRY))
+            continue;
+
+        // find identifier= attr
+        const char *pId = findXMLAttValu(nickxml, NICK_ATTR_ID);
+        const char *pVal = pcdataXMLEle(nickxml);
+        if (pId && pVal)
+        {
+            std::string sId{pId}, sVal{pVal}; // deep copy
+            trim(sId);
+            trim(sVal);
+            if (!sId.empty() && !sVal.empty())
+                nicknameMap[sId] = sVal;
+        }
+    }
+
+    delXMLEle(nickxml);
+    delXMLEle(devicexml);
+    delXMLEle(NickXmlRoot);
+    nicknamesLoaded = true;
+
+    return 0;
+}
+
+/**
+ * @brief Save Nickname data to XML.
+ *
+ * This needs to re-read the XML file in case other devices wrote data since it was last read.
+ * First read the whole file, find entry for this driver (if exists), create if not.
+ * Clear old and add new entries for nicknames from mNickname map.
+ */
+int DefaultDevicePrivate::saveINDINicknamesXML(const char *devicename)
+{
+    const std::string filename = GetHomeDirectory() + NICKNAME_FILE;
+
+    LilXML *lp = newLilXML();
+    XMLEle *NickXmlRoot = nullptr;
+    XMLEle *devicexml = nullptr;
+    XMLEle *nickxml = nullptr;
+    static char errmsg[XML_ERROR_SIZE];
+    memset(errmsg, 0, sizeof(errmsg)); // Clear anything from prior run
+    FILE *fp = fopen(filename.c_str(), "r+");
+    if (fp)
+    {
+        NickXmlRoot = readXMLFile(fp, lp, errmsg);
+    }
+
+    // NickXmlRoot is the root <INDINickname> tag
+    if (!NickXmlRoot) // empty file, make new root node
+        NickXmlRoot = addXMLEle(nullptr, NICK_TAG_ROOT);
+
+    if (strcmp(tagXMLEle(NickXmlRoot), NICK_TAG_ROOT) != 0)
+    {
+        // Unexpected tag, clear and make new
+        delXMLEle(NickXmlRoot);
+        NickXmlRoot = addXMLEle(nullptr, NICK_TAG_ROOT);
+    }
+
+    // children of top level INDINicknames
+    // This should be <device>
+    devicexml = nextXMLEle(NickXmlRoot, 1);
+    for (; devicexml != NULL; devicexml = nextXMLEle(NickXmlRoot, 0))
+    {
+        // Skip non <device> tags
+        if (strcmp(tagXMLEle(devicexml), NICK_TAG_DEVICE))
+            continue;
+
+        // find name= attr
+        const char *devname = findXMLAttValu(devicexml, NICK_ATTR_NAME);
+        // skip other drivers
+        if (devname && strcmp(devname, devicename) == 0)
+        {
+            // Found <device name= matching the current driver
+            nickxml = nextXMLEle(devicexml, 1);
+            break;
+        }
+    }
+
+    if (!devicexml)
+    {
+        // No entry found for current driver, add empty
+        devicexml = addXMLEle(NickXmlRoot, NICK_TAG_DEVICE);
+        addXMLAtt(devicexml, NICK_ATTR_NAME, devicename);
+    }
+
+    // Remove all nicknames in current driver section
+    while ((nickxml = nextXMLEle(devicexml, 1)) != 0)
+    {
+        delXMLEle(nickxml);
+        nickxml = nullptr;
+    }
+
+    for (const auto &kv : nicknameMap)
+    {
+        nickxml = addXMLEle(devicexml, NICK_TAG_ENTRY);
+        addXMLAtt(nickxml, NICK_ATTR_ID, kv.first.c_str());
+        editXMLEle(nickxml, kv.second.c_str());
+    }
+
+    // Reopen for writing and truncate file.
+    // freopen requires a valid FILE* — if the file didn't exist, fp is null, so fall back to fopen.
+    if (fp)
+        fp = freopen(filename.c_str(), "w+", fp);
+    else
+        fp = fopen(filename.c_str(), "w+");
+    if (fp)
+    {
+        prXMLEle(fp, NickXmlRoot, 0);
+        fclose(fp);
+    }
+
+    delXMLEle(NickXmlRoot);
+    delLilXML(lp);
+    return 0;
+}
+
 DefaultDevicePrivate::DefaultDevicePrivate(DefaultDevice *defaultDevice)
     : defaultDevice(defaultDevice)
 {
@@ -131,7 +434,7 @@ DefaultDevicePrivate::~DefaultDevicePrivate()
 }
 
 DefaultDevice::DefaultDevice()
-    : BaseDevice(*new DefaultDevicePrivate(this))
+    : ParentDevice(std::shared_ptr<ParentDevicePrivate>(new DefaultDevicePrivate(this)))
 {
     D_PTR(DefaultDevice);
     d->m_MainLoopTimer.setSingleShot(true);
@@ -139,9 +442,10 @@ DefaultDevice::DefaultDevice()
     d->m_MainLoopTimer.callOnTimeout(std::bind(&DefaultDevice::TimerHit, this));
 }
 
-DefaultDevice::DefaultDevice(DefaultDevicePrivate &dd)
-    : BaseDevice(dd)
-{ }
+bool DefaultDevice::loadConfig(INDI::Property &property)
+{
+    return loadConfig(true, property.getName());
+}
 
 bool DefaultDevice::loadConfig(bool silent, const char *property)
 {
@@ -187,11 +491,11 @@ bool DefaultDevice::saveConfigItems(FILE *fp)
 
 bool DefaultDevice::saveAllConfigItems(FILE *fp)
 {
-    for (const auto &oneProperty : *getProperties())
+    for (const auto &oneProperty : getProperties())
     {
-        if (oneProperty->getType() == INDI_SWITCH)
+        if (oneProperty.getType() == INDI_SWITCH)
         {
-            const auto &svp = oneProperty->getSwitch();
+            const auto &svp = oneProperty.getSwitch();
             /* Never save CONNECTION property. Don't save switches with no switches on if the rule is one of many */
             if (
                 (svp->isNameMatch(INDI::SP::CONNECTION)) ||
@@ -199,7 +503,7 @@ bool DefaultDevice::saveAllConfigItems(FILE *fp)
             )
                 continue;
         }
-        oneProperty->save(fp);
+        oneProperty.save(fp);
     }
     return true;
 }
@@ -217,9 +521,16 @@ bool DefaultDevice::purgeConfig()
     return true;
 }
 
+bool DefaultDevice::saveConfig(INDI::Property &property)
+{
+    return saveConfig(true, property.getName());
+}
+
 bool DefaultDevice::saveConfig(bool silent, const char *property)
 {
     D_PTR(DefaultDevice);
+    if (d->isConfigLoading)
+        return false;
     silent = false;
     char errmsg[MAXRBUF] = {0};
 
@@ -277,6 +588,20 @@ bool DefaultDevice::saveConfig(bool silent, const char *property)
         XMLEle *ep         = nullptr;
         bool propertySaved = false;
 
+        // Check that the saved members match the current property members. If members were added or
+        // removed since the configuration was written (e.g. new baud rates), editing the saved members
+        // in place would drop the new ones, so the whole configuration must be saved instead.
+        auto savedLayoutMatches = [&ep](const auto &oneProperty)
+        {
+            size_t savedCount = 0;
+            for (XMLEle *oneElement = nextXMLEle(ep, 1); oneElement != nullptr; oneElement = nextXMLEle(ep, 0), savedCount++)
+            {
+                if (oneProperty.findWidgetByName(findXMLAttValu(oneElement, "name")) == nullptr)
+                    return false;
+            }
+            return savedCount == oneProperty.count();
+        };
+
         for (ep = nextXMLEle(root, 1); ep != nullptr; ep = nextXMLEle(root, 0))
         {
             const char *elemName = findXMLAttValu(ep, "name");
@@ -288,17 +613,23 @@ bool DefaultDevice::saveConfig(bool silent, const char *property)
             if (!strcmp(tagName, "newSwitchVector"))
             {
                 auto svp = getSwitch(elemName);
-                if (svp == nullptr)
+                if (!svp)
                 {
                     delXMLEle(root);
                     return false;
                 }
 
+                if (!savedLayoutMatches(svp))
+                {
+                    delXMLEle(root);
+                    return saveConfig(silent);
+                }
+
                 XMLEle *sw = nullptr;
                 for (sw = nextXMLEle(ep, 1); sw != nullptr; sw = nextXMLEle(ep, 0))
                 {
-                    auto oneSwitch = svp->findWidgetByName(findXMLAttValu(sw, "name"));
-                    if (oneSwitch == nullptr)
+                    auto oneSwitch = svp.findWidgetByName(findXMLAttValu(sw, "name"));
+                    if (!oneSwitch)
                     {
                         delXMLEle(root);
                         return false;
@@ -314,17 +645,23 @@ bool DefaultDevice::saveConfig(bool silent, const char *property)
             else if (!strcmp(tagName, "newNumberVector"))
             {
                 auto nvp = getNumber(elemName);
-                if (nvp == nullptr)
+                if (!nvp)
                 {
                     delXMLEle(root);
                     return false;
                 }
 
+                if (!savedLayoutMatches(nvp))
+                {
+                    delXMLEle(root);
+                    return saveConfig(silent);
+                }
+
                 XMLEle *np = nullptr;
                 for (np = nextXMLEle(ep, 1); np != nullptr; np = nextXMLEle(ep, 0))
                 {
-                    auto oneNumber = nvp->findWidgetByName(findXMLAttValu(np, "name"));
-                    if (oneNumber == nullptr)
+                    auto oneNumber = nvp.findWidgetByName(findXMLAttValu(np, "name"));
+                    if (!oneNumber)
                         return false;
 
                     char formatString[MAXRBUF];
@@ -338,17 +675,23 @@ bool DefaultDevice::saveConfig(bool silent, const char *property)
             else if (!strcmp(tagName, "newTextVector"))
             {
                 auto tvp = getText(elemName);
-                if (tvp == nullptr)
+                if (!tvp)
                 {
                     delXMLEle(root);
                     return false;
                 }
 
+                if (!savedLayoutMatches(tvp))
+                {
+                    delXMLEle(root);
+                    return saveConfig(silent);
+                }
+
                 XMLEle *tp = nullptr;
                 for (tp = nextXMLEle(ep, 1); tp != nullptr; tp = nextXMLEle(ep, 0))
                 {
-                    auto oneText = tvp->findWidgetByName(findXMLAttValu(tp, "name"));
-                    if (oneText == nullptr)
+                    auto oneText = tvp.findWidgetByName(findXMLAttValu(tp, "name"));
+                    if (!oneText)
                         return false;
 
                     char formatString[MAXRBUF];
@@ -400,7 +743,7 @@ bool DefaultDevice::loadDefaultConfig()
     if (pResult)
         LOG_INFO("Default configuration loaded.");
     else
-        LOGF_INFO("Error loading default configuraiton. %s", errmsg);
+        LOGF_INFO("Error loading default configuration. %s", errmsg);
 
     return pResult;
 }
@@ -412,175 +755,35 @@ bool DefaultDevice::ISNewSwitch(const char *dev, const char *name, ISState *stat
     if (strcmp(dev, getDeviceName()))
         return false;
 
-    auto svp = getSwitch(name);
+    INDI::PropertySwitch property = getProperty(name, INDI_SWITCH);
 
-    if (svp == nullptr)
+    if (!property.isValid())
         return false;
 
-    ////////////////////////////////////////////////////
-    // Connection
-    ////////////////////////////////////////////////////
-    if (svp->isNameMatch(d->ConnectionSP.getName()))
-    {
-        bool rc = false;
-
-        for (int i = 0; i < n; i++)
-        {
-            if (!strcmp(names[i], "CONNECT") && (states[i] == ISS_ON))
-            {
-                // If disconnected, try to connect.
-                if (isConnected() == false)
-                {
-                    rc = Connect();
-
-                    if (rc)
-                    {
-                        // Connection is successful, set it to OK and updateProperties.
-                        setConnected(true, IPS_OK);
-                        updateProperties();
-                    }
-                    else
-                        setConnected(false, IPS_ALERT);
-                }
-                else
-                    // Already connected, tell client we're connected already.
-                    setConnected(true);
-            }
-            else if (!strcmp(names[i], "DISCONNECT") && (states[i] == ISS_ON))
-            {
-                // If connected, try to disconnect.
-                if (isConnected() == true)
-                {
-                    rc = Disconnect();
-                    // Disconnection is successful, set it IDLE and updateProperties.
-                    if (rc)
-                    {
-                        setConnected(false, IPS_IDLE);
-                        updateProperties();
-                    }
-                    else
-                        setConnected(true, IPS_ALERT);
-                }
-                // Already disconnected, tell client we're disconnected already.
-                else
-                    setConnected(false, IPS_IDLE);
-            }
-        }
-
-        return true;
-    }
-
-    ////////////////////////////////////////////////////
-    // Connection Mode
-    ////////////////////////////////////////////////////
-    if (svp->isNameMatch(d->ConnectionModeSP.getName()))
-    {
-        d->ConnectionModeSP.update(states, names, n);
-
-        int activeConnectionMode = d->ConnectionModeSP.findOnSwitchIndex();
-
-        if (activeConnectionMode >= 0 && activeConnectionMode < static_cast<int>(d->connections.size()))
-        {
-            d->activeConnection = d->connections[activeConnectionMode];
-            d->activeConnection->Activated();
-
-            for (Connection::Interface *oneConnection : d->connections)
-            {
-                if (oneConnection == d->activeConnection)
-                    continue;
-
-                oneConnection->Deactivated();
-            }
-
-            d->ConnectionModeSP.setState(IPS_OK);
-        }
-        else
-            d->ConnectionModeSP.setState(IPS_ALERT);
-
-        d->ConnectionModeSP.apply();
-
-        return true;
-    }
-
-    ////////////////////////////////////////////////////
-    // Debug
-    ////////////////////////////////////////////////////
-    if (svp->isNameMatch("DEBUG"))
-    {
-        IUUpdateSwitch(svp, states, names, n);
-
-        auto sp = svp->findOnSwitch();
-        assert(sp != nullptr);
-
-        setDebug(sp->isNameMatch("ENABLE") ? true : false);
-
-        return true;
-    }
-
-    ////////////////////////////////////////////////////
-    // Simulation
-    ////////////////////////////////////////////////////
-    if (svp->isNameMatch("SIMULATION"))
-    {
-        IUUpdateSwitch(svp, states, names, n);
-
-        auto sp = svp->findOnSwitch();
-        assert(sp != nullptr);
-
-        setSimulation(sp->isNameMatch("ENABLE") ? true : false);
-
-        return true;
-    }
-
-    ////////////////////////////////////////////////////
-    // Configuration
-    ////////////////////////////////////////////////////
-    if (svp->isNameMatch("CONFIG_PROCESS"))
-    {
-        IUUpdateSwitch(svp, states, names, n);
-
-        auto sp = svp->findOnSwitch();
-        svp->reset();
-        bool pResult = false;
-
-        // Not suppose to happen (all switches off) but let's handle it anyway
-        if (sp == nullptr)
-        {
-            svp->setState(IPS_IDLE);
-            svp->apply();
-            return true;
-        }
-
-        if (sp->isNameMatch("CONFIG_LOAD"))
-            pResult = loadConfig();
-        else if (sp->isNameMatch("CONFIG_SAVE"))
-            pResult = saveConfig();
-        else if (sp->isNameMatch("CONFIG_DEFAULT"))
-            pResult = loadDefaultConfig();
-        else if (sp->isNameMatch("CONFIG_PURGE"))
-            pResult = purgeConfig();
-
-        svp->setState(pResult ? IPS_OK : IPS_ALERT);
-        svp->apply();
-        return true;
-    }
-
+    // #PS: TODO Remove
     ////////////////////////////////////////////////////
     // Debugging and Logging Levels
     ////////////////////////////////////////////////////
-    if (svp->isNameMatch("DEBUG_LEVEL") || svp->isNameMatch("LOGGING_LEVEL") || svp->isNameMatch("LOG_OUTPUT"))
+    if (
+        property.isNameMatch("DEBUG_LEVEL") ||
+        property.isNameMatch("LOGGING_LEVEL") ||
+        property.isNameMatch("LOG_OUTPUT"))
     {
         bool rc = Logger::ISNewSwitch(dev, name, states, names, n);
 
-        if (svp->isNameMatch("LOG_OUTPUT"))
+        if (property.isNameMatch("LOG_OUTPUT"))
         {
-            auto sw = svp->findWidgetByName("FILE_DEBUG");
+            auto sw = property.findWidgetByName("FILE_DEBUG");
             if (sw != nullptr && sw->getState() == ISS_ON)
                 DEBUGF(Logger::DBG_SESSION, "Session log file %s", Logger::getLogFile().c_str());
         }
 
         return rc;
     }
+
+    property.update(states, names, n); // update and callback
+    if (property.hasUpdateCallback())
+        return true;
 
     bool rc = false;
     for (Connection::Interface *oneConnection : d->connections)
@@ -592,17 +795,15 @@ bool DefaultDevice::ISNewSwitch(const char *dev, const char *name, ISState *stat
 bool DefaultDevice::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
 {
     D_PTR(DefaultDevice);
-    ////////////////////////////////////////////////////
-    // Polling Period
-    ////////////////////////////////////////////////////
-    if (d->PollPeriodNP.isNameMatch(name))
-    {
-        d->PollPeriodNP.update(values, names, n);
-        d->PollPeriodNP.setState(IPS_OK);
-        d->pollingPeriod = static_cast<uint32_t>(d->PollPeriodNP[0].getValue());
-        d->PollPeriodNP.apply();
+
+    INDI::PropertyNumber property = getProperty(name, INDI_NUMBER);
+
+    if (!property.isValid())
+        return false;
+
+    property.update(values, names, n); // update and callback
+    if (property.hasUpdateCallback())
         return true;
-    }
 
     for (Connection::Interface *oneConnection : d->connections)
         oneConnection->ISNewNumber(dev, name, values, names, n);
@@ -613,6 +814,16 @@ bool DefaultDevice::ISNewNumber(const char *dev, const char *name, double values
 bool DefaultDevice::ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n)
 {
     D_PTR(DefaultDevice);
+
+    INDI::PropertyText property = getProperty(name, INDI_TEXT);
+
+    if (!property.isValid())
+        return false;
+
+    property.update(texts, names, n); // update and callback
+    if (property.hasUpdateCallback())
+        return true;
+
     for (Connection::Interface *oneConnection : d->connections)
         oneConnection->ISNewText(dev, name, texts, names, n);
 
@@ -623,6 +834,16 @@ bool DefaultDevice::ISNewBLOB(const char *dev, const char *name, int sizes[], in
                               char *formats[], char *names[], int n)
 {
     D_PTR(DefaultDevice);
+
+    INDI::PropertyBlob property = getProperty(name, INDI_BLOB);
+
+    if (!property.isValid())
+        return false;
+
+    property.update(sizes, blobsizes, blobs, formats, names, n); // update and callback
+    if (property.hasUpdateCallback())
+        return true;
+
     for (Connection::Interface *oneConnection : d->connections)
         oneConnection->ISNewBLOB(dev, name, sizes, blobsizes, blobs, formats, names, n);
 
@@ -631,8 +852,16 @@ bool DefaultDevice::ISNewBLOB(const char *dev, const char *name, int sizes[], in
 
 bool DefaultDevice::ISSnoopDevice(XMLEle *root)
 {
-    INDI_UNUSED(root);
-    return false;
+    D_PTR(DefaultDevice);
+    char errmsg[MAXRBUF];
+    return d->watchDevice.processXml(INDI::LilXmlElement(root), errmsg) < 0;
+}
+
+void DefaultDevice::watchDevice(const char *name, const std::function<void (BaseDevice)> &callback)
+{
+    D_PTR(DefaultDevice);
+    d->watchDevice.watchDevice(name, callback);
+    IDSnoopDevice(name, nullptr);
 }
 
 void DefaultDevice::addDebugControl()
@@ -659,6 +888,12 @@ void DefaultDevice::addPollPeriodControl()
 {
     D_PTR(DefaultDevice);
     registerProperty(d->PollPeriodNP);
+}
+
+void DefaultDevice::addNicknameControl()
+{
+    D_PTR(DefaultDevice);
+    registerProperty(d->NicknameTP);
 }
 
 void DefaultDevice::addAuxControls()
@@ -746,6 +981,11 @@ void DefaultDevice::simulationTriggered(bool enable)
     INDI_UNUSED(enable);
 }
 
+void DefaultDevice::nicknameSet(const char *nickname)
+{
+    INDI_UNUSED(nickname);
+}
+
 void DefaultDevice::ISGetProperties(const char *dev)
 {
     D_PTR(DefaultDevice);
@@ -773,10 +1013,10 @@ void DefaultDevice::ISGetProperties(const char *dev)
 
     for (const auto &oneProperty : *getProperties())
     {
-        if (d->defineDynamicProperties == false && oneProperty->isDynamic())
+        if (d->defineDynamicProperties == false && oneProperty.isDynamic())
             continue;
 
-        oneProperty->define();
+        oneProperty.define();
     }
 
     // Remember debug & logging settings
@@ -836,10 +1076,10 @@ void DefaultDevice::ISGetProperties(const char *dev)
 
 void DefaultDevice::resetProperties()
 {
-    for (auto &oneProperty : *getProperties())
+    for (auto &oneProperty : getProperties())
     {
-        oneProperty->setState(IPS_IDLE);
-        oneProperty->apply();
+        oneProperty.setState(IPS_IDLE);
+        oneProperty.apply();
     }
 }
 
@@ -849,14 +1089,14 @@ void DefaultDevice::setConnected(bool status, IPState state, const char *msg)
     if (!svp)
         return;
 
-    svp->at(INDI_ENABLED)->setState(status ? ISS_ON : ISS_OFF);
-    svp->at(INDI_DISABLED)->setState(status ? ISS_OFF : ISS_ON);
-    svp->setState(state);
+    svp[INDI_ENABLED].setState(status ? ISS_ON : ISS_OFF);
+    svp[INDI_DISABLED].setState(status ? ISS_OFF : ISS_ON);
+    svp.setState(state);
 
     if (msg == nullptr)
-        svp->apply();
+        svp.apply();
     else
-        svp->apply("%s", msg);
+        svp.apply("%s", msg);
 }
 
 // Set the timeout for the TimerHit function.
@@ -869,7 +1109,7 @@ int DefaultDevice::SetTimer(uint32_t ms)
 }
 
 // Remove main timer. ID is not used.
-// Kept for backward compatiblity
+// Kept for backward compatibility
 void DefaultDevice::RemoveTimer(int id)
 {
     INDI_UNUSED(id);
@@ -879,7 +1119,7 @@ void DefaultDevice::RemoveTimer(int id)
 }
 
 //  This is just a placeholder
-//  This function should be overriden by child classes if they use timers
+//  This function should be overridden by child classes if they use timers
 //  So we should never get here
 void DefaultDevice::TimerHit()
 {
@@ -892,19 +1132,23 @@ bool DefaultDevice::updateProperties()
     return true;
 }
 
-uint16_t DefaultDevice::getDriverInterface()
+// Early access to properties.
+// The `BaseDevice::getDriverInterface()` function will return a false value of 0
+// when the `DriverInfoTP` property has not yet been registered.
+//
+// The situation occurs in the case of drivers where the class that inherits from `DefaultDevice`
+// will call the `setDriverInterface` function in the constructor
+
+uint32_t DefaultDevice::getDriverInterface() const
 {
-    D_PTR(DefaultDevice);
-    return d->interfaceDescriptor;
+    D_PTR(const DefaultDevice);
+    return atoi(d->DriverInfoTP[3 /* DRIVER_INTERFACE */].getText());
 }
 
-void DefaultDevice::setDriverInterface(uint16_t value)
+void DefaultDevice::setDriverInterface(uint32_t value)
 {
     D_PTR(DefaultDevice);
-    char interfaceStr[16];
-    d->interfaceDescriptor = value;
-    snprintf(interfaceStr, 16, "%d", d->interfaceDescriptor);
-    d->DriverInfoTP[3].setText(interfaceStr);
+    d->DriverInfoTP[3 /* DRIVER_INTERFACE */].setText(std::to_string(value));
 }
 
 void DefaultDevice::syncDriverInfo()
@@ -920,11 +1164,80 @@ bool DefaultDevice::initProperties()
     char interfaceStr[16];
 
     snprintf(versionStr, 16, "%d.%d", d->majorVersion, d->minorVersion);
-    snprintf(interfaceStr, 16, "%d", d->interfaceDescriptor);
+    snprintf(interfaceStr, 16, "%d", getDriverInterface());
 
+    // Connection Mode
+    d->ConnectionModeSP.onUpdate([d]()
+    {
+        int activeConnectionMode = d->ConnectionModeSP.findOnSwitchIndex();
+
+        if (activeConnectionMode >= 0 && activeConnectionMode < static_cast<int>(d->connections.size()))
+        {
+            d->activeConnection = d->connections[activeConnectionMode];
+            d->activeConnection->Activated();
+
+            for (Connection::Interface *oneConnection : d->connections)
+            {
+                if (oneConnection == d->activeConnection)
+                    continue;
+
+                oneConnection->Deactivated();
+            }
+
+            d->ConnectionModeSP.setState(IPS_OK);
+        }
+        else
+            d->ConnectionModeSP.setState(IPS_ALERT);
+
+        d->ConnectionModeSP.apply();
+
+    });
+
+    // Connection
     d->ConnectionSP[INDI_ENABLED ].fill("CONNECT",    "Connect",    ISS_OFF);
     d->ConnectionSP[INDI_DISABLED].fill("DISCONNECT", "Disconnect", ISS_ON);
     d->ConnectionSP.fill(getDeviceName(), INDI::SP::CONNECTION, "Connection", "Main Control", IP_RW, ISR_1OFMANY, 60, IPS_IDLE);
+    d->ConnectionSP.onNewValues([this](const INDI::PropertySwitch::NewValues & values)
+    {
+        if (values.contains("CONNECT", ISS_ON))
+        {
+            // If disconnected, try to connect.
+            if (isConnected() == false)
+            {
+                if (Connect())
+                {
+                    // Connection is successful, set it to OK and updateProperties.
+                    setConnected(true);
+                    updateProperties();
+                }
+                else
+                    setConnected(false, IPS_ALERT);
+            }
+            else
+                // Already connected, tell client we're connected already.
+                setConnected(true);
+        }
+
+        if (values.contains("DISCONNECT", ISS_ON))
+        {
+            // If connected, try to disconnect.
+            if (isConnected() == true)
+            {
+                // Disconnection is successful, set it IDLE and updateProperties.
+                if (Disconnect())
+                {
+                    setConnected(false, IPS_IDLE);
+                    updateProperties();
+                }
+                else
+                    setConnected(true, IPS_ALERT);
+            }
+            // Already disconnected, tell client we're disconnected already.
+            else
+                setConnected(false, IPS_IDLE);
+        }
+
+    });
     registerProperty(d->ConnectionSP);
 
     d->DriverInfoTP[0].fill("DRIVER_NAME", "Name", getDriverName());
@@ -934,31 +1247,96 @@ bool DefaultDevice::initProperties()
     d->DriverInfoTP.fill(getDeviceName(), "DRIVER_INFO", "Driver Info", CONNECTION_TAB, IP_RO, 60, IPS_IDLE);
     registerProperty(d->DriverInfoTP);
 
+    // Debug
     d->DebugSP[INDI_ENABLED ].fill("ENABLE",  "Enable",  ISS_OFF);
     d->DebugSP[INDI_DISABLED].fill("DISABLE", "Disable", ISS_ON);
     d->DebugSP.fill(getDeviceName(), "DEBUG", "Debug", "Options", IP_RW, ISR_1OFMANY, 0, IPS_IDLE);
+    d->DebugSP.onUpdate([this, d]()
+    {
+        auto sp = d->DebugSP.findOnSwitch();
+        assert(sp != nullptr);
+        setDebug(sp->isNameMatch("ENABLE") ? true : false);
+    });
 
+    // Simulation
     d->SimulationSP[INDI_ENABLED ].fill("ENABLE",  "Enable",  ISS_OFF);
     d->SimulationSP[INDI_DISABLED].fill("DISABLE", "Disable", ISS_ON);
     d->SimulationSP.fill(getDeviceName(), "SIMULATION", "Simulation", "Options", IP_RW, ISR_1OFMANY, 0, IPS_IDLE);
+    d->SimulationSP.onUpdate([this, d]()
+    {
+        auto sp = d->SimulationSP.findOnSwitch();
+        assert(sp != nullptr);
+        setSimulation(sp->isNameMatch("ENABLE") ? true : false);
+    });
 
+    // Configuration
     d->ConfigProcessSP[0].fill("CONFIG_LOAD",    "Load",    ISS_OFF);
     d->ConfigProcessSP[1].fill("CONFIG_SAVE",    "Save",    ISS_OFF);
     d->ConfigProcessSP[2].fill("CONFIG_DEFAULT", "Default", ISS_OFF);
     d->ConfigProcessSP[3].fill("CONFIG_PURGE",   "Purge",   ISS_OFF);
     d->ConfigProcessSP.fill(getDeviceName(), "CONFIG_PROCESS", "Configuration", "Options", IP_RW, ISR_ATMOST1, 0, IPS_IDLE);
+    d->ConfigProcessSP.onUpdate([this, d]()
+    {
+        auto svp = d->ConfigProcessSP;
+        auto sp = svp.findOnSwitch();
+        svp.reset();
+        bool pResult = false;
 
+        // Not suppose to happen (all switches off) but let's handle it anyway
+        if (sp == nullptr)
+        {
+            svp.setState(IPS_IDLE);
+            svp.apply();
+            return;
+        }
+
+        if (sp->isNameMatch("CONFIG_LOAD"))
+            pResult = loadConfig();
+        else if (sp->isNameMatch("CONFIG_SAVE"))
+            pResult = saveConfig();
+        else if (sp->isNameMatch("CONFIG_DEFAULT"))
+            pResult = loadDefaultConfig();
+        else if (sp->isNameMatch("CONFIG_PURGE"))
+            pResult = purgeConfig();
+
+        svp.setState(pResult ? IPS_OK : IPS_ALERT);
+        svp.apply();
+    });
+
+    // Polling Period
     d->PollPeriodNP[0].fill("PERIOD_MS", "Period (ms)", "%.f", 10, 600000, 1000, d->pollingPeriod);
     d->PollPeriodNP.fill(getDeviceName(), "POLLING_PERIOD", "Polling", "Options", IP_RW, 0, IPS_IDLE);
+    d->PollPeriodNP.onUpdate([d]()
+    {
+        d->PollPeriodNP.setState(IPS_OK);
+        d->pollingPeriod = static_cast<uint32_t>(d->PollPeriodNP[0].getValue());
+        d->PollPeriodNP.apply();
+    });
+
+    d->NicknameTP[0].fill("nickname", "nickname", d->deviceNickname.c_str());
+    d->NicknameTP.fill(getDeviceName(), "NICKNAME", "Nickname", INFO_TAB, IP_RW, 60, IPS_IDLE);
+    d->NicknameTP.onUpdate([d, this]()
+    {
+        setDeviceNickname(d->NicknameTP[0].getText());
+        d->NicknameTP[0].setText(d->deviceNickname);
+        d->NicknameTP.setState(IPS_OK);
+        d->NicknameTP.apply();
+        nicknameSet(d->deviceNickname.c_str());
+    });
 
     INDI::Logger::initProperties(this);
 
     // Ready the logger
     std::string logFile = getDriverExec();
 
-    DEBUG_CONF(logFile, Logger::file_off | Logger::screen_on, Logger::defaultlevel, Logger::defaultlevel);
+    DEBUG_CONF(logFile, Logger::file_off | Logger::screen_on, Logger::defaultlevel, Logger::defaultlevel)
 
     return true;
+}
+
+bool DefaultDevice::deleteProperty(INDI::Property &property)
+{
+    return deleteProperty(property.getName());
 }
 
 bool DefaultDevice::deleteProperty(const char *propertyName)
@@ -976,8 +1354,8 @@ bool DefaultDevice::deleteProperty(const char *propertyName)
     // Keep dynamic properties in existing property list so they can be reused
     if (d->deleteDynamicProperties == false)
     {
-        INDI::Property *prop = getProperty(propertyName);
-        if (prop && prop->isDynamic())
+        INDI::Property prop = getProperty(propertyName);
+        if (prop && prop.isDynamic())
         {
             IDDelete(getDeviceName(), propertyName, nullptr);
             return true;
@@ -995,32 +1373,32 @@ bool DefaultDevice::deleteProperty(const char *propertyName)
 
 void DefaultDevice::defineProperty(INumberVectorProperty *property)
 {
-    registerProperty(property);
-    static_cast<PropertyView<INumber>*>(property)->define();
+    registerProperty(INDI::Property(property));
+    static_cast<PropertyViewNumber*>(property)->define();
 }
 
 void DefaultDevice::defineProperty(ITextVectorProperty *property)
 {
-    registerProperty(property);
-    static_cast<PropertyView<IText>*>(property)->define();
+    registerProperty(INDI::Property(property));
+    static_cast<PropertyViewText*>(property)->define();
 }
 
 void DefaultDevice::defineProperty(ISwitchVectorProperty *property)
 {
-    registerProperty(property);
-    static_cast<PropertyView<ISwitch>*>(property)->define();
+    registerProperty(INDI::Property(property));
+    static_cast<PropertyViewSwitch*>(property)->define();
 }
 
 void DefaultDevice::defineProperty(ILightVectorProperty *property)
 {
-    registerProperty(property);
-    static_cast<PropertyView<ILight>*>(property)->define();
+    registerProperty(INDI::Property(property));
+    static_cast<PropertyViewLight*>(property)->define();
 }
 
 void DefaultDevice::defineProperty(IBLOBVectorProperty *property)
 {
-    registerProperty(property);
-    static_cast<PropertyView<IBLOB>*>(property)->define();
+    registerProperty(INDI::Property(property));
+    static_cast<PropertyViewBlob*>(property)->define();
 }
 
 void DefaultDevice::defineProperty(INDI::Property &property)
@@ -1197,8 +1575,8 @@ void DefaultDevice::setActiveConnection(Connection::Interface *existingConnectio
                 d->ConnectionModeSP[index].setState(ISS_ON);
                 d->ConnectionModeSP.setState(IPS_OK);
                 // If property is registerned then send back response to client
-                INDI::Property *connectionProperty = getProperty(d->ConnectionModeSP.getName(), INDI_SWITCH);
-                if (connectionProperty && connectionProperty->getRegistered())
+                INDI::Property connectionProperty = getProperty(d->ConnectionModeSP.getName(), INDI_SWITCH);
+                if (connectionProperty && connectionProperty.getRegistered())
                     d->ConnectionModeSP.apply();
             }
         }
@@ -1213,6 +1591,94 @@ const char *DefaultDevice::getDriverExec()
 const char *DefaultDevice::getDriverName()
 {
     return getDefaultName();
+}
+
+void DefaultDevice::setDeviceNickname(const char *nick)
+{
+    D_PTR(DefaultDevice);
+    std::string def{getDefaultName()};
+
+    std::string n, full;
+    if (nick)
+        n = nick;
+
+    if (n.rfind(def, 0) == 0)   // Remove prefix if nick is full name
+    {
+        n = n.substr(def.length());
+    }
+    // If prefix was removed, remove the space left over
+    trim(n);
+    d->deviceNickname = n;
+
+    // setDeviceName can only be set during initialization. The Nickname can be
+    // set in NicknameTP and will take affect when restarted.
+    if (!d->isInit)
+    {
+        if (d->deviceNickname.empty())
+            full = def;
+        else
+            full = def + " " + d->deviceNickname;
+        setDeviceName(full.c_str());
+    }
+}
+
+const char *DefaultDevice::getDeviceNickname()
+{
+    D_PTR(const DefaultDevice);
+    return d->deviceNickname.c_str();
+}
+
+const char *DefaultDevice::lookupDeviceNicknameFromId(const char *identifier, const char *device)
+{
+    D_PTR(DefaultDevice);
+    if (!identifier)
+        return nullptr;
+
+    if (device)
+    {
+        // NOT IMPLEMENTED
+        // Any need to lookup nicknames for other devices? (maybe to help
+        // migration?)
+        return "";
+    }
+
+    std::string id{identifier};
+
+    if (!d->nicknamesLoaded)
+        d->loadINDINicknamesXML(getDefaultName());
+
+    auto search = d->nicknameMap.find(id);
+    if (search != d->nicknameMap.end())
+        return search->second.c_str();
+
+    return "";
+}
+
+bool DefaultDevice::setDeviceNicknameFromId(const char *identifier)
+{
+    const char *nick = lookupDeviceNicknameFromId(identifier);
+    bool hasNickname = (nick && *nick);
+    setDeviceNickname(nick);
+    return hasNickname;
+}
+
+void DefaultDevice::saveNicknameId(const char *nickname, const char *identifier)
+{
+    D_PTR(DefaultDevice);
+    if (!identifier)
+        return;
+
+    std::string id{identifier};
+    trim(id);
+    std::string nick = (nickname) ? nickname : d->deviceNickname;
+    if (nick.empty() || id.empty())
+        return;
+
+    if (!d->nicknamesLoaded)
+        d->loadINDINicknamesXML(getDefaultName());
+
+    d->nicknameMap[id] = nick;
+    d->saveINDINicknamesXML(getDefaultName());
 }
 
 void DefaultDevice::setVersion(uint16_t vMajor, uint16_t vMinor)
@@ -1263,6 +1729,108 @@ bool DefaultDevice::isInitializationComplete() const
 {
     D_PTR(const DefaultDevice);
     return d->isInit;
+}
+
+bool DefaultDevice::ISNewProperty(INDI::Property &property, const std::string &elementName, const std::any &value)
+{
+    if (!property.isValid() || elementName.empty())
+    {
+        LOGF_WARN("ISNewProperty: Invalid property or empty element name for device '%s'.", getDeviceName());
+        return false;
+    }
+
+    char mutableElementName[MAXINDINAME]; // Use MAXINDINAME from indicom.h
+    strncpy(mutableElementName, elementName.c_str(), sizeof(mutableElementName) - 1);
+    mutableElementName[sizeof(mutableElementName) - 1] = '\0'; // Ensure null termination
+    char *names[] = { mutableElementName };
+
+    switch (property.getType())
+    {
+        case INDI_SWITCH:
+        {
+            try
+            {
+                ISState newState = std::any_cast<ISState>(value);
+                ISState states[] = { newState };
+                return ISNewSwitch(getDeviceName(), property.getName(), states, names, 1);
+            }
+            catch (const std::bad_any_cast &e)
+            {
+                LOGF_ERROR("ISNewProperty: Type mismatch for Switch property '%s'. Expected ISState. Got: %s",
+                           property.getName(), e.what());
+                return false;
+            }
+        }
+        case INDI_NUMBER:
+        {
+            try
+            {
+                double newValue = 0;
+                if (value.type() == typeid(int))
+                {
+                    newValue = static_cast<double>(std::any_cast<int>(value));
+                }
+                else if (value.type() == typeid(long))
+                {
+                    newValue = static_cast<double>(std::any_cast<long>(value));
+                }
+                else if (value.type() == typeid(double))
+                {
+                    newValue = std::any_cast<double>(value);
+                }
+                else
+                {
+                    throw std::bad_any_cast();
+                }
+
+                double values[] = { newValue };
+                return ISNewNumber(getDeviceName(), property.getName(), values, names, 1);
+            }
+            catch (const std::bad_any_cast &e)
+            {
+                LOGF_ERROR("ISNewProperty: Type mismatch for Number property '%s'. Expected double, int, or long. Got: %s",
+                           property.getName(), e.what());
+                return false;
+            }
+        }
+        case INDI_TEXT:
+        {
+            try
+            {
+                char mutableTextValue[1024]; // Use 1024 for text buffer
+                memset(mutableTextValue, 0, sizeof(mutableTextValue));
+
+                if (value.type() == typeid(const char *))
+                {
+                    const char *text = std::any_cast<const char *>(value);
+                    if (text) strncpy(mutableTextValue, text, sizeof(mutableTextValue) - 1);
+                }
+                else if (value.type() == typeid(std::string))
+                {
+                    const std::string &text = std::any_cast<std::string>(value);
+                    strncpy(mutableTextValue, text.c_str(), sizeof(mutableTextValue) - 1);
+                }
+                else
+                {
+                    throw std::bad_any_cast();
+                }
+                mutableTextValue[sizeof(mutableTextValue) - 1] = '\0'; // Ensure null termination
+
+                char *texts[] = { mutableTextValue };
+                return ISNewText(getDeviceName(), property.getName(), texts, names, 1);
+            }
+            catch (const std::bad_any_cast &e)
+            {
+                LOGF_ERROR("ISNewProperty: Type mismatch for Text property '%s'. Expected const char* or std::string. Got: %s",
+                           property.getName(), e.what());
+                return false;
+            }
+        }
+        default:
+            LOGF_WARN("ISNewProperty: Unsupported property type for property '%s'.", property.getName());
+            return false;
+    }
+    return false;
 }
 
 }

@@ -69,8 +69,8 @@ class AAF2 : public INDI::Focuser
         bool Ack();
         /**
          * @brief sendCommand Send a string command to AAF2.
-         * @param cmd Command to be sent, must already have the necessary delimeter ('#')
-         * @param res If not nullptr, the function will read until it detects the default delimeter ('#') up to ML_RES length.
+         * @param cmd Command to be sent, must already have the necessary delimiter ('#')
+         * @param res If not nullptr, the function will read until it detects the default delimiter ('#') up to ML_RES length.
          *        if nullptr, no read back is done and the function returns true.
          * @return True if successful, false otherwise.
          */
@@ -86,15 +86,14 @@ class AAF2 : public INDI::Focuser
         bool isMoving();
 
         // Read Only Temperature Reporting
-        INumber TemperatureN[1];
-        INumberVectorProperty TemperatureNP;
+        INDI::PropertyNumber TemperatureNP {1};
 
         double targetPos { 0 }, lastPos { 0 }, lastTemperature { 0 };
 
         // AAF2 Buffer
         static const uint8_t DRIVER_RES { 32 };
-        // AAF2 Delimeter
+        // AAF2 Delimiter
         static const char DRIVER_DEL { '#' };
-        // AAF2 Tiemout
+        // AAF2 Timeout
         static const uint8_t DRIVER_TIMEOUT { 3 };
 };

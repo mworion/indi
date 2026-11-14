@@ -30,7 +30,7 @@ INFO
 :Gg#            -003*18:03#  longitud
 :Gt#            +41*06:56#   latitude
 :GL#            7:02:47.0#   local time
-:GS#            20:12: 3.3#  Sideral Time
+:GS#            20:12: 3.3#  Sidereal Time
 :GR#            2:12:57.4#   RA
 :GD#            +90* 0: 0#   DEC
 :GA#            +41* 6:55#   ALT
@@ -48,10 +48,10 @@ COMMANDS
 This only works if the mount is not stopped (tracking)
 :RT0# -->       Lunar
 :RT1# -->       solar
-:RT2# -->       sideral
+:RT2# -->       sidereal
 :RT9# -->               zero but not work!!
 
-!!!There isn't a command to start/stop tracking !!! You have to do manualy
+!!!There isn't a command to start/stop tracking !!! You have to do manually
 
 This speeds only are taken into account for protocol buttons, not for the HC Buttons
 :RG#  -->  Select guide speed for :Mn#,:Ms# ....
@@ -68,7 +68,7 @@ V1.12 2011-08-12
 UPGRADE INFO ON: http://www.ioptron.com/Articles.asp?ID=268
 
 :RT9#     -> stop tracking
-:RT0#     -> start tracking at sidera speed. Formerly only preselect sideral speed but
+:RT0#     -> start tracking at sidera speed. Formerly only preselect sidereal speed but
              not start the tracking itself
 
 :Me#
@@ -114,7 +114,7 @@ ioptronHC8406::ioptronHC8406()
     setLX200Capability(LX200_HAS_FOCUS | LX200_HAS_PULSE_GUIDING);
     SetTelescopeCapability(TELESCOPE_CAN_PARK | TELESCOPE_CAN_SYNC | TELESCOPE_CAN_GOTO |
                            TELESCOPE_CAN_ABORT | TELESCOPE_HAS_TIME | TELESCOPE_HAS_LOCATION |
-                           TELESCOPE_HAS_TRACK_MODE | TELESCOPE_CAN_CONTROL_TRACK);
+                           TELESCOPE_HAS_TRACK_MODE | TELESCOPE_CAN_CONTROL_TRACK, 4);
 
 }
 
@@ -149,7 +149,7 @@ bool ioptronHC8406::initProperties()
     IUFillSwitchVector(&CenterRateSP, CenterRateS, 4, getDeviceName(),
                        "CENTER_RATE", "Center Speed", MOTION_TAB, IP_RW, ISR_1OFMANY, 0, IPS_IDLE);
 
-    TrackModeSP.nsp = 3;
+    TrackModeSP = 3;
 
     return true;
 }
@@ -359,7 +359,7 @@ void ioptronHC8406::getBasicData()
 void ioptronHC8406::ioptronHC8406Init()
 {
     //This mount doesn't report anything so we send some CMD
-    //just to get syncronize with the GUI at start time
+    //just to get synchronized with the GUI at start time
     LOG_WARN("Sending init CMDs. Unpark, Stop tracking");
     UnPark();
     TrackState = SCOPE_IDLE;
@@ -380,29 +380,31 @@ bool ioptronHC8406::Goto(double r, double d)
     LOGF_DEBUG("<GOTO RA/DEC> %s/%s", RAStr, DecStr);
 
     // If moving, let's stop it first.
-    if (EqNP.s == IPS_BUSY)
+    if (EqNP.getState() == IPS_BUSY)
     {
         if (!isSimulation() && abortSlew(PortFD) < 0)
         {
-            AbortSP.s = IPS_ALERT;
-            IDSetSwitch(&AbortSP, "Abort slew failed.");
+            AbortSP.setState(IPS_ALERT);
+            LOG_ERROR("Abort slew failed.");
+            Telescope::AbortSP.apply();
             return false;
         }
 
-        AbortSP.s = IPS_OK;
-        EqNP.s    = IPS_IDLE;
-        IDSetSwitch(&AbortSP, "Slew aborted.");
-        IDSetNumber(&EqNP, nullptr);
+        AbortSP.setState(IPS_OK);
+        EqNP.setState(IPS_IDLE);
+        LOG_ERROR("Slew aborted.");
+        Telescope::AbortSP.apply();
+        EqNP.apply();
 
-        if (MovementNSSP.s == IPS_BUSY || MovementWESP.s == IPS_BUSY)
+        if (MovementNSSP.getState() == IPS_BUSY || MovementWESP.getState() == IPS_BUSY)
         {
-            MovementNSSP.s = IPS_IDLE;
-            MovementWESP.s = IPS_IDLE;
-            EqNP.s = IPS_IDLE;
-            IUResetSwitch(&MovementNSSP);
-            IUResetSwitch(&MovementWESP);
-            IDSetSwitch(&MovementNSSP, nullptr);
-            IDSetSwitch(&MovementWESP, nullptr);
+            MovementNSSP.setState(IPS_IDLE);
+            MovementWESP.setState(IPS_IDLE);
+            EqNP.setState(IPS_IDLE);
+            MovementNSSP.reset();
+            MovementWESP.reset();
+            MovementNSSP.apply();
+            MovementWESP.apply();
         }
 
         // sleep for 100 mseconds
@@ -413,15 +415,17 @@ bool ioptronHC8406::Goto(double r, double d)
     {
         if (setObjectRA(PortFD, targetRA) < 0 || (setObjectDEC(PortFD, targetDEC)) < 0)
         {
-            EqNP.s = IPS_ALERT;
-            IDSetNumber(&EqNP, "Error setting RA/DEC.");
+            EqNP.setState(IPS_ALERT);
+            LOG_ERROR("Error setting RA/DEC");
+            EqNP.apply();
             return false;
         }
 
         if (slewioptronHC8406() == 0)
         {
-            EqNP.s = IPS_ALERT;
-            IDSetNumber(&EqNP, "Error Slewing to JNow RA %s - DEC %s\n", RAStr, DecStr);
+            EqNP.setState(IPS_ALERT);
+            LOGF_ERROR("Error Slewing to JNow RA %s - DEC %s\n", RAStr, DecStr);
+            EqNP.apply();
             slewError(1);
             return false;
         }
@@ -441,8 +445,9 @@ bool ioptronHC8406::Sync(double ra, double dec)
     {
         if (setObjectRA(PortFD, ra) < 0 || setObjectDEC(PortFD, dec) < 0)
         {
-            EqNP.s = IPS_ALERT;
-            IDSetNumber(&EqNP, "Error setting RA/DEC. Unable to Sync.");
+            EqNP.setState(IPS_ALERT);
+            LOG_ERROR("Error setting RA/DEC. Unable to Sync.");
+            EqNP.apply();
             return false;
         }
 
@@ -466,8 +471,9 @@ bool ioptronHC8406::Sync(double ra, double dec)
 
         if (syncOK == false)
         {
-            EqNP.s = IPS_ALERT;
-            IDSetNumber(&EqNP, "Synchronization failed.");
+            EqNP.setState(IPS_ALERT);
+            LOG_ERROR("Synchronization failed.");
+            EqNP.apply();
             return false;
         }
 
@@ -672,7 +678,7 @@ int ioptronHC8406::setioptronHC8406Longitude(double Long)
 
     getSexComponents(Long, &d, &m, &s);
 
-    snprintf(temp_string, sizeof(temp_string), ":Sg %03d*%02d:%02d#", abs(d), m, s);
+    snprintf(temp_string, sizeof(temp_string), ":Sg %c%03d*%02d:%02d#", sign, abs(d), m, s);
 
     return (setioptronHC8406StandardProcedure(PortFD, temp_string));
 }
@@ -755,7 +761,7 @@ bool ioptronHC8406::SetTrackEnabled(bool enabled)
 {
     if (enabled)
     {
-        LOG_WARN("<SetTrackEnabled> START TRACKING AT SIDERAL SPEED (:RT2#)");
+        LOG_WARN("<SetTrackEnabled> START TRACKING AT SIDEREAL SPEED (:RT2#)");
         return setioptronHC8406TrackMode(0);
     }
     else
@@ -873,7 +879,7 @@ bool ioptronHC8406::ReadScopeStatus()
         if (isSlewComplete())
         {
             nanosleep(&timeout, nullptr); //Wait until :MS# finish
-            if (IUFindSwitch(&CoordSP, "SYNC")->s == ISS_ON || IUFindSwitch(&CoordSP, "SLEW")->s == ISS_ON)
+            if (CoordSP.isSwitchOn("SYNC") || CoordSP.isSwitchOn("SLEW"))
             {
                 TrackState = SCOPE_IDLE;
                 LOG_WARN("Slew is complete. IDLE");
@@ -899,8 +905,9 @@ bool ioptronHC8406::ReadScopeStatus()
 
     if (getLX200RA(PortFD, &currentRA) < 0 || getLX200DEC(PortFD, &currentDEC) < 0)
     {
-        EqNP.s = IPS_ALERT;
-        IDSetNumber(&EqNP, "Error reading RA/DEC.");
+        EqNP.setState(IPS_ALERT);
+        LOG_ERROR("Error reading RA/DEC.");
+        EqNP.apply();
         return false;
     }
 
@@ -929,7 +936,7 @@ void ioptronHC8406::mountSim()
     ltv = tv;
     da  = SLEWRATE * dt;
 
-    /* Process per current state. We check the state of EQUATORIAL_COORDS and act acoordingly */
+    /* Process per current state. We check the state of EQUATORIAL_COORDS and act accordingly */
     switch (TrackState)
     {
         case SCOPE_TRACKING:
@@ -1165,10 +1172,10 @@ bool ioptronHC8406::sendScopeTime()
     {
         snprintf(cdate, 32, "%d-%02d-%02dT%02d:%02d:%02d", 1979, 6, 25, 3, 30, 30);
         IDLog("Telescope ISO date and time: %s\n", cdate);
-        IUSaveText(&TimeT[0], cdate);
-        IUSaveText(&TimeT[1], "3");
-        TimeTP.s = IPS_OK;
-        IDSetText(&TimeTP, nullptr);
+        TimeTP[UTC].setText(cdate);
+        TimeTP[OFFSET].setText("3");
+        TimeTP.setState(IPS_OK);
+        TimeTP.apply();
         return true;
     }
 
@@ -1186,7 +1193,7 @@ bool ioptronHC8406::sendScopeTime()
     LOGF_DEBUG("<VAL> UTC offset: %d:%d:%d --->%g", utc_h, utc_m, utc_s, lx200_utc_offset);
     // LX200 TimeT Offset is defined at the number of hours added to LOCAL TIME to get TimeT. This is contrary to the normal definition.
     LOGF_DEBUG("<VAL> UTC offset str: %s", utc_offset_res);
-    IUSaveText(&TimeT[1], utc_offset_res);
+    TimeTP[OFFSET].setText(utc_offset_res);
     //IUSaveText(&TimeT[1], lx200_utc_offset);
 
     getLocalTime24(PortFD, &ctime);
@@ -1221,14 +1228,14 @@ bool ioptronHC8406::sendScopeTime()
 
     /* Format it into ISO 8601 */
     strftime(cdate, 32, "%Y-%m-%dT%H:%M:%S", &utm);
-    IUSaveText(&TimeT[0], cdate);
+    TimeTP[UTC].setText(cdate);
 
     LOGF_DEBUG("Mount controller Local Time: %02d:%02d:%02d", h, m, s);
-    LOGF_DEBUG("Mount controller UTC Time: %s", TimeT[0].text);
+    LOGF_DEBUG("Mount controller UTC Time: %s", TimeTP[UTC].getText());
 
     // Let's send everything to the client
-    TimeTP.s = IPS_OK;
-    IDSetText(&TimeTP, nullptr);
+    TimeTP.setState(IPS_OK);
+    TimeTP.apply();
     return true;
 }
 

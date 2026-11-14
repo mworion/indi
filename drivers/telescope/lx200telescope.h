@@ -121,7 +121,7 @@ class LX200Telescope : public INDI::Telescope, public INDI::GuiderInterface, pub
         // Initial function to get data after connection is successful
         virtual void getBasicData();
 
-        // Get local calender date (NOT UTC) from mount. Expected format is YYYY-MM-DD
+        // Get local calendar date (NOT UTC) from mount. Expected format is YYYY-MM-DD
         virtual bool getLocalDate(char *dateString);
         virtual bool setLocalDate(uint8_t days, uint8_t months, uint16_t years);
 
@@ -138,6 +138,8 @@ class LX200Telescope : public INDI::Telescope, public INDI::GuiderInterface, pub
 
         // Get mount alignment type (AltAz..etc)
         void getAlignment();
+        /** Report TELESCOPE_MOUNT_TYPE for an Alignment switch index (0 Polar, 1 AltAz, 2 Land). */
+        void updateMountTypeFromAlignment(int index);
 
         // Send Mount time and location settings to client
         virtual bool sendScopeTime();
@@ -171,6 +173,8 @@ class LX200Telescope : public INDI::Telescope, public INDI::GuiderInterface, pub
         int trackingMode {0};
 
         bool sendTimeOnStartup = true, sendLocationOnStartup = true;
+        // Mount dates earlier than this year are treated as an unset controller clock.
+        static constexpr int MIN_VALID_MOUNT_YEAR {2022};
         uint8_t DBG_SCOPE {0};
 
         double JD {0};
@@ -189,7 +193,7 @@ class LX200Telescope : public INDI::Telescope, public INDI::GuiderInterface, pub
         /* Use pulse-guide commands */
         ISwitchVectorProperty UsePulseCmdSP;
         ISwitch UsePulseCmdS[2];
-        bool usePulseCommand { false };
+        bool usePulseCommand { true };
 
         /* Site Management */
         ISwitchVectorProperty SiteSP;

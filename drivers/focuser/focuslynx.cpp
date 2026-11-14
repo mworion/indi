@@ -48,6 +48,8 @@ FocusLynxF1::FocusLynxF1(const char *target)
      * F1 or F2 to set the target of the created instance
      */
     setFocusTarget(target);
+    // set the focuser name to a fixed value to ensure that both focusers are visible
+    setDeviceName(FocusLynxF1::getDefaultName());
 
     // Both communication available, Serial and network (tcp/ip)
     setSupportedConnections(CONNECTION_SERIAL | CONNECTION_TCP);
@@ -118,7 +120,7 @@ const char *FocusLynxF1::getDefaultName()
  *
 * ***********************************************************************************/
 bool FocusLynxF1::Connect()
-/* Overide of connect() function
+/* Override of connect() function
  * different for F1 or F2 focuser
  * F1 connect only himself to the driver and
  * it is the only one who's connect to the communication port to establish the physical communication
@@ -295,15 +297,15 @@ bool FocusLynxF1::getHubConfig()
     response[nbytes_read - 1] = '\0';
     LOGF_DEBUG("RES <%s>", response);
 
-    int rc = sscanf(response, "%16[^=]=%16[^\n]s", key, text);
+    int rc = sscanf(response, "%15[^=]=%15[^\n]s", key, text);
     if (rc == 2)
     {
         HubTP.s = IPS_OK;
         IUSaveText(&HubT[0], text);
         IDSetText(&HubTP, nullptr);
 
-        //Save localy the Version of the firmware's Hub
-        strncpy(version, text, sizeof(version));
+        //Save locally the Version of the firmware's Hub
+        snprintf(version, sizeof(version), "%s", text);
 
         LOGF_DEBUG("Text =  %s,  Key = %s", text, key);
     }
@@ -328,7 +330,7 @@ bool FocusLynxF1::getHubConfig()
     response[nbytes_read - 1] = '\0';
     LOGF_DEBUG("RES <%s>", response);
 
-    rc = sscanf(response, "%16[^=]=%s", key, text);
+    rc = sscanf(response, "%15[^=]=%s", key, text);
     if (rc == 2)
     {
         HubTP.s = IPS_OK;
@@ -358,7 +360,7 @@ bool FocusLynxF1::getHubConfig()
     response[nbytes_read - 1] = '\0';
     LOGF_DEBUG("RES <%s>", response);
 
-    rc = sscanf(response, "%16[^=]=%s", key, text);
+    rc = sscanf(response, "%15[^=]=%s", key, text);
     if (rc == 2)
     {
         WiredTP.s = IPS_OK;
@@ -388,7 +390,7 @@ bool FocusLynxF1::getHubConfig()
     response[nbytes_read - 1] = '\0';
     LOGF_DEBUG("RES <%s>", response);
 
-    rc = sscanf(response, "%16[^=]=%16[^\n]s", key, text);
+    rc = sscanf(response, "%15[^=]=%15[^\n]s", key, text);
     if (rc == 2)
     {
         WiredTP.s = IPS_OK;
@@ -418,7 +420,7 @@ bool FocusLynxF1::getHubConfig()
     response[nbytes_read - 1] = '\0';
     LOGF_DEBUG("RES <%s>", response);
 
-    rc = sscanf(response, "%16[^=]=%s", key, text);
+    rc = sscanf(response, "%15[^=]=%s", key, text);
     if (rc == 2)
     {
         WifiTP.s = IPS_OK;
@@ -447,7 +449,7 @@ bool FocusLynxF1::getHubConfig()
     response[nbytes_read - 1] = '\0';
     LOGF_DEBUG("RES <%s>", response);
 
-    rc = sscanf(response, "%16[^=]=%s", key, text);
+    rc = sscanf(response, "%15[^=]=%s", key, text);
     if (rc == 2)
     {
         WifiTP.s = IPS_OK;
@@ -476,7 +478,7 @@ bool FocusLynxF1::getHubConfig()
     response[nbytes_read - 1] = '\0';
     LOGF_DEBUG("RES <%s>", response);
 
-    rc = sscanf(response, "%16[^=]=%s", key, text);
+    rc = sscanf(response, "%15[^=]=%s", key, text);
     if (rc == 2)
     {
         WifiTP.s = IPS_OK;
@@ -505,7 +507,7 @@ bool FocusLynxF1::getHubConfig()
     response[nbytes_read - 1] = '\0';
     LOGF_DEBUG("RES <%s>", response);
 
-    rc = sscanf(response, "%16[^=]=%s", key, text);
+    rc = sscanf(response, "%15[^=]=%s", key, text);
     if (rc == 2)
     {
         WifiTP.s = IPS_OK;
@@ -534,7 +536,7 @@ bool FocusLynxF1::getHubConfig()
     response[nbytes_read - 1] = '\0';
     LOGF_DEBUG("RES <%s>", response);
 
-    rc = sscanf(response, "%32[^=]=%s", key, text);
+    rc = sscanf(response, "%15[^=]=%s", key, text);
     if (rc == 2)
     {
         WifiTP.s = IPS_OK;
@@ -548,7 +550,7 @@ bool FocusLynxF1::getHubConfig()
     memset(response, 0, sizeof(response));
     memset(text, 0, sizeof(text));
 
-    // WIFI IP adress
+    // WIFI IP address
     if (isSimulation())
     {
         strncpy(response, "WF IP = 192.168.1.11\n", 32);
@@ -563,7 +565,7 @@ bool FocusLynxF1::getHubConfig()
     response[nbytes_read - 1] = '\0';
     LOGF_DEBUG("RES <%s>", response);
 
-    rc = sscanf(response, "%16[^=]=%s", key, text);
+    rc = sscanf(response, "%15[^=]=%s", key, text);
     if (rc == 2)
     {
         WifiTP.s = IPS_OK;
@@ -592,7 +594,7 @@ bool FocusLynxF1::getHubConfig()
     response[nbytes_read - 1] = '\0';
     LOGF_DEBUG("RES <%s>", response);
 
-    rc = sscanf(response, "%16[^=]= %s", key, text);
+    rc = sscanf(response, "%15[^=]= %s", key, text);
     if (rc == 2)
     {
         WifiTP.s = IPS_OK;
@@ -621,7 +623,7 @@ bool FocusLynxF1::getHubConfig()
     response[nbytes_read - 1] = '\0';
     LOGF_DEBUG("RES <%s>", response);
 
-    rc = sscanf(response, "%16[^=]=%s", key, text);
+    rc = sscanf(response, "%15[^=]=%s", key, text);
     if (rc == 2)
     {
         WifiTP.s = IPS_OK;
@@ -650,7 +652,7 @@ bool FocusLynxF1::getHubConfig()
     response[nbytes_read - 1] = '\0';
     LOGF_DEBUG("RES <%s>", response);
 
-    rc = sscanf(response, "%16[^=]=%s", key, text);
+    rc = sscanf(response, "%15[^=]=%s", key, text);
     if (rc == 2)
     {
         WifiTP.s = IPS_OK;
@@ -689,7 +691,7 @@ bool FocusLynxF1::getHubConfig()
     {
         response[nbytes_read - 1] = '\0';
 
-        // Display the response to be sure to have read the complet TTY Buffer.
+        // Display the response to be sure to have read the complete TTY Buffer.
         LOGF_DEBUG("RES <%s>", response);
 
         if (strcmp(response, "END"))
@@ -752,6 +754,8 @@ void FocusLynxF1::setDebug(bool enable)
 FocusLynxF2::FocusLynxF2(const char *target)
 {
     setFocusTarget(target);
+    // set the focuser name to a fixed value to ensure that both focusers are visible
+    setDeviceName(FocusLynxF2::getDefaultName());
 
     // The second focuser has no direct communication with the hub
     setSupportedConnections(CONNECTION_NONE);
@@ -770,7 +774,6 @@ bool FocusLynxF2::initProperties()
 {
     FocusLynxBase::initProperties();
     // Remove from F2 to avoid confusion, already present on F1
-    deleteProperty("DRIVER_INFO");
     deleteProperty("SIMULATION");
     // deleteProperty("POLLING_PERIOD");
     return true;
@@ -788,7 +791,7 @@ const char *FocusLynxF2::getDefaultName()
  *
 * ***********************************************************************************/
 bool FocusLynxF2::Connect()
-/* Overide of connect() function
+/* Override of connect() function
  * different for F2 or F1 focuser
  * F2 don't connect himself to the hub
  */
@@ -843,7 +846,7 @@ bool FocusLynxF2::RemoteDisconnect()
         updateProperties();
     }
 
-    // When called by F1, the PortFD should be -1; For debbug purpose
+    // When called by F1, the PortFD should be -1; For debug purposes
     PortFD = lynxDriveF1->getPortFD();
     LOGF_INFO("Remote disconnection: %s is offline.", getDeviceName());
     LOGF_INFO("Value of F2 PortFD = %d", PortFD);

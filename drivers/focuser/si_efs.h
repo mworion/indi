@@ -21,7 +21,12 @@
 #pragma once
 
 #include "indifocuser.h"
-#include "hidapi.h"
+
+#ifdef _USE_SYSTEM_HIDAPILIB
+#include <hidapi/hidapi.h>
+#else
+#include <indi_hidapi.h>
+#endif
 
 #include <map>
 
@@ -38,7 +43,8 @@ class SIEFS : public INDI::Focuser
                        SI_MAX_POS,
                        SI_FAST_IN  = 0x11,
                        SI_FAST_OUT = 0x12,
-                       SI_HALT     = 0xFF
+                       SI_HALT     = 0xFF,
+                       SI_MOTOR_POLARITY = 0x61
                      } SI_COMMANDS;
 
 
@@ -66,6 +72,8 @@ class SIEFS : public INDI::Focuser
         virtual bool SyncFocuser(uint32_t ticks) override;
         virtual bool SetFocuserMaxPosition(uint32_t ticks) override;
 
+        virtual bool ReverseFocuser(bool enabled) override;
+
     private:
         /**
          * @brief setPosition Set Position (Either Absolute or Maximum)
@@ -90,6 +98,10 @@ class SIEFS : public INDI::Focuser
         // Set/Get Maximum Position
         bool setMaxPosition(uint32_t ticks);
         bool getMaxPosition(uint32_t *ticks);
+
+        // Polarity
+        bool isReversed();
+        bool setReversed(bool enabled);
 
         bool sendCommand(SI_COMMANDS targetCommand);
         bool getStatus();

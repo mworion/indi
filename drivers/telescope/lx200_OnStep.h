@@ -6,7 +6,7 @@
     Ray Wells https://github.com/blueshawk
     Jamie Flinn https://github.com/jamiecflinn
 
-    Copyright (C) 2003 Jasem Mutlaq (mutlaqja@ikarustech.com)-2021 (Contributors, above)
+    Copyright (C) 2003-2026 Jasem Mutlaq (mutlaqja@ikarustech.com)-2021 (Contributors, above)
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Lesser General Public
@@ -24,7 +24,33 @@
 
     ===========================================
 
+    Version 1.26: Fix issues due to migration to new INDI properties.
+    Version 1.25: Refactor driver to use INDI new properties.
+    Version 1.24: During manual slew, only send back RA & DE.
     Version not yet updated/No INDI release:
+    Version 1.22
+    - fixed #:AW#" and ":MP#" commands by using getCommandSingleCharResponse instead of sendOnStepCommandBlind
+    Version 1.21
+    - fixed Onstep returning '9:9' when 9 star alignment is achieved thanks to Howard Dutton
+    Version 1.20
+    - fixed wrong messages due to different return with OnStepX
+    - fixed Focuser Temperature not shown on Ekos
+    - fixed Weather settings (P/T/Hr) when no sensor present
+    - minor typos
+    Version 1.19
+    - fixed typo on debug information saying error instead of nbchar causing confusion
+    - fixed Autoflip Off update
+    - fixed Elevation Limits update (was not read from OnStep) and format set to integer and gage for setup
+    - fixed minutes passed meridian not showing actual values
+    - fixed missing slewrates defineProperty and deleteProperty causing redefinitions of overrides
+    - todo focuser stops working after some time ??? could not yet reproduce
+    - fixed poll and update slew rates
+    - todo poll and update maximum slew speed SmartWebServer=>Settings
+    Version 1.18
+    - implemented Focuser T° compensation in FOCUSER TAB
+    - Minor fixes
+    Version 1.17
+    - fixed setMaxElevationLimit / setMinElevationLimit
     Version 1.16
     - fixed uninitialized UTC structure thanks to Norikyu
     Version 1.15
@@ -56,7 +82,7 @@
     Version 1.10: (finalized: INDI 1.9.1)
     - Weather support for setting temperature/humidity/pressure, values will be overridden in OnStep by any sensor values.
     - Ability to swap primary focuser.
-    - High precision on location, and not overridding GPS even when marked for Mount > KStars.
+    - High precision on location, and not overriding GPS even when marked for Mount > KStars.
     - Added Rotator & De-Rotator Support
     - TMC_SPI status reported (RAW) on the Status Tab. (ST = Standstill, Ox = open load A/B, Gx = grounded A/B, OT = Overtemp Shutdown, PW = Overtemp Prewarning)
     - Manage OnStep Auxiliary Feature Names in Output Tab
@@ -96,7 +122,7 @@
     - James lan Focuser Code
     - James lan PEC
     - James Lan Alignment
-    - Azwing set all com variable legth to RB_MAX_LEN otherwise crash due to overflow
+    - Azwing set all com variable length to RB_MAX_LEN otherwise crash due to overflow
     - Azwing set local variable size to RB_MAX_LEN otherwise erased by overflow preventing Align and other stuf to work
     - James Lan Align Tab implementation
     - Azwing Removed Alignment in main tab
@@ -123,8 +149,11 @@
 #include "indiweatherinterface.h"
 #include "indirotatorinterface.h"
 #include "connectionplugins/connectiontcp.h"
+#include "indipropertytext.h"
+#include "indipropertyswitch.h"
+#include "indipropertynumber.h"
 
-
+#include <chrono>
 #include <cstring>
 #include <unistd.h>
 #include <termios.h>
@@ -132,16 +161,6 @@
 
 #define RB_MAX_LEN 64
 #define CMD_MAX_LEN 32
-
-#define setParkOnStep(fd)  write(fd, "#:hQ#", 5)
-#define ReticPlus(fd)      write(fd, "#:B+#", 5)
-#define ReticMoins(fd)     write(fd, "#:B-#", 5)
-#define OnStepalign1(fd)   write(fd, "#:A1#", 5)
-#define OnStepalign2(fd)   write(fd, "#:A2#", 5)
-#define OnStepalign3(fd)   write(fd, "#:A3#", 5)
-#define OnStepalignOK(fd)   write(fd, "#:A+#", 5)
-#define OnStep
-#define RB_MAX_LEN 64
 
 #define PORTS_COUNT 10
 #define STARTING_PORT 0
@@ -167,6 +186,7 @@ class LX200_OnStep : public LX200Generic, public INDI::WeatherInterface, public 
         virtual bool updateProperties() override;
         virtual bool ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n) override;
         virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
+        virtual bool Handshake() override;
 
     protected:
         virtual void getBasicData() override;
@@ -183,6 +203,9 @@ class LX200_OnStep : public LX200Generic, public INDI::WeatherInterface, public 
         virtual bool SetTrackRate(double raRate, double deRate) override;
         virtual void slewError(int slewCode) override;
         virtual bool Sync(double ra, double dec) override;
+
+        virtual bool MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command) override;
+        virtual bool MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command) override;
 
         virtual bool saveConfigItems(FILE *fp) override;
         virtual void Init_Outputs();
@@ -214,12 +237,13 @@ class LX200_OnStep : public LX200Generic, public INDI::WeatherInterface, public 
         //RotatorInterface
 
         IPState MoveRotator(double angle) override;
-        //         bool SyncRotator(double angle) override;
         IPState HomeRotator() override;
-        //         bool ReverseRotator(bool enabled) override;
         bool AbortRotator() override;
         bool SetRotatorBacklash (int32_t steps) override;
         bool SetRotatorBacklashEnabled(bool enabled) override;
+
+        // Homing
+        virtual IPState ExecuteHomeAction(TelescopeHomeAction action) override;
 
         //End RotatorInterface
 
@@ -262,6 +286,8 @@ class LX200_OnStep : public LX200Generic, public INDI::WeatherInterface, public 
         IPState OSDisableOutput(int output);
         bool OSGetOutputState(int output);
 
+        // Reset slew rate labels
+        void initSlewRates();
 
         bool sendOnStepCommand(const char *cmd);
         bool sendOnStepCommandBlind(const char *cmd);
@@ -271,36 +297,22 @@ class LX200_OnStep : public LX200Generic, public INDI::WeatherInterface, public 
         int getCommandDoubleResponse(int fd, double *value, char *data,
                                      const char *cmd); //Reimplemented from getCommandString Will return a double, and raw value.
         int getCommandIntResponse(int fd, int *value, char *data, const char *cmd);
-        int  setMaxElevationLimit(int fd, int max);
+        int  setMinElevationLimit(int fd, int min);
         int OSUpdateFocuser(); //Return = 0 good, -1 = Communication error
         int OSUpdateRotator(); //Return = 0 good, -1 = Communication error
 
-        ITextVectorProperty ObjectInfoTP;
-        IText ObjectInfoT[1] {};
+        INDI::PropertyText ObjectInfoTP {1};
 
-        ISwitchVectorProperty StarCatalogSP;
-        ISwitch StarCatalogS[3];
+        INDI::PropertySwitch StarCatalogSP {3};
+        INDI::PropertySwitch DeepSkyCatalogSP {7};
+        INDI::PropertySwitch SolarSP {10};
 
-        ISwitchVectorProperty DeepSkyCatalogSP;
-        ISwitch DeepSkyCatalogS[7];
+        INDI::PropertyNumber ObjectNoNP {1};
+        INDI::PropertyNumber MaxSlewRateNP {1};
+        INDI::PropertyNumber BacklashNP {2};
+        INDI::PropertyNumber ElevationLimitNP {2};
 
-        ISwitchVectorProperty SolarSP;
-        ISwitch SolarS[10];
-
-        INumberVectorProperty ObjectNoNP;
-        INumber ObjectNoN[1];
-
-        INumberVectorProperty MaxSlewRateNP;
-        INumber MaxSlewRateN[2];
-
-        INumberVectorProperty BacklashNP;    //test
-        INumber BacklashN[2];    //Test
-
-        INumberVectorProperty ElevationLimitNP;
-        INumber ElevationLimitN[2];
-
-        ITextVectorProperty VersionTP;
-        IText VersionT[5] {};
+        INDI::PropertyText VersionTP {4};
 
         OnStepVersion OnStepMountVersion = OSV_UNKNOWN;
 
@@ -308,8 +320,7 @@ class LX200_OnStep : public LX200Generic, public INDI::WeatherInterface, public 
         long int OSTimeoutMicroSeconds = 100000;
 
         // OnStep Status controls
-        ITextVectorProperty OnstepStatTP;
-        IText OnstepStat[11] {};
+        INDI::PropertyText OnstepStatTP {11};
 
         bool TMCDrivers = true; //Set to false if it doesn't detect TMC_SPI reporting. (Small delay on connection/first update)
         bool OSHighPrecision = false;
@@ -317,108 +328,73 @@ class LX200_OnStep : public LX200Generic, public INDI::WeatherInterface, public 
         // Focuser controls
         // Focuser 1
         bool OSFocuser1 = false;
-        ISwitchVectorProperty OSFocus1InitializeSP;
-        ISwitch OSFocus1InitializeS[4];
+        INDI::PropertySwitch OSFocus1InitializeSP {2};
+
+        // Focus T° Compensation
+        INDI::PropertyNumber FocusTemperatureNP {2};
+        INDI::PropertySwitch TFCCompensationSP {2};
+        INDI::PropertyNumber TFCCoefficientNP {1};
+        INDI::PropertyNumber TFCDeadbandNP {1};
+        // End Focus T° Compensation
 
         int OSNumFocusers = 0;
-        ISwitchVectorProperty OSFocusSelectSP;
-        ISwitch OSFocusSelectS[9];
+        INDI::PropertySwitch OSFocusSelectSP {10};
 
         // Focuser 2
         //ISwitchVectorProperty OSFocus2SelSP;
         //ISwitch OSFocus2SelS[2];
         bool OSFocuser2 = false;
-        ISwitchVectorProperty OSFocus2RateSP;
-        ISwitch OSFocus2RateS[4];
-
-        ISwitchVectorProperty OSFocus2MotionSP;
-        ISwitch OSFocus2MotionS[3];
-
-        INumberVectorProperty OSFocus2TargNP;
-        INumber OSFocus2TargN[1];
+        INDI::PropertySwitch OSFocus2RateSP {4};
+        INDI::PropertySwitch OSFocus2MotionSP {3};
+        INDI::PropertyNumber OSFocus2TargNP {1};
 
         //Rotator - Some handled by RotatorInterface, but that's mostly for rotation only, absolute, and... very limited.
         bool OSRotator1 = false; //Change to false after detection code
-        ISwitchVectorProperty OSRotatorRateSP;
-        ISwitch OSRotatorRateS[4]; //Set rate
+        INDI::PropertySwitch OSRotatorRateSP {4};
 
-        ISwitchVectorProperty OSRotatorDerotateSP;
-        ISwitch OSRotatorDerotateS[2]; //On or Off
-
-
+        INDI::PropertySwitch OSRotatorDerotateSP {2};
 
         int IsTracking = 0;
+        uint32_t m_RememberPollingPeriod {1000};
 
         // Reticle +/- Buttons
-        ISwitchVectorProperty ReticSP;
-        ISwitch ReticS[2];
+        INDI::PropertySwitch ReticSP {2};
 
         // Align Buttons
-        ISwitchVectorProperty TrackCompSP;
-        ISwitch TrackCompS[3];
+        INDI::PropertySwitch TrackCompSP {3};
+        INDI::PropertySwitch TrackAxisSP {3};
+        INDI::PropertySwitch FrequencyAdjustSP {3};
+        INDI::PropertySwitch AutoFlipSP {2};
+        INDI::PropertySwitch HomePauseSP {3};
 
-        ISwitchVectorProperty TrackAxisSP;
-        ISwitch TrackAxisS[3];
+        // ISwitchVectorProperty SetHomeSP;
+        // ISwitch SetHomeS[2];
 
-        ISwitchVectorProperty FrequencyAdjustSP;
-        ISwitch FrequencyAdjustS[3];
+        INDI::PropertySwitch PreferredPierSideSP {3};
+        INDI::PropertyNumber minutesPastMeridianNP {2};
 
-        ISwitchVectorProperty AutoFlipSP;
-        ISwitch AutoFlipS[2];
+        INDI::PropertySwitch OSPECStatusSP {5};
+        INDI::PropertySwitch OSPECIndexSP {2};
+        INDI::PropertySwitch OSPECRecordSP {3};
+        INDI::PropertySwitch OSPECReadSP {2};
+        INDI::PropertyNumber OSPECCurrentIndexNP {2};
+        INDI::PropertyNumber OSPECUserIndexNP {2};
+        INDI::PropertyNumber OSPECRWValuesNP {2}; //Current Index  and User Index
 
-        ISwitchVectorProperty HomePauseSP;
-        ISwitch HomePauseS[3];
-
-        ISwitchVectorProperty SetHomeSP;
-        ISwitch SetHomeS[2];
-
-        ISwitchVectorProperty PreferredPierSideSP;
-        ISwitch PreferredPierSideS[3];
-
-        INumberVectorProperty minutesPastMeridianNP;
-        INumber minutesPastMeridianN[2];
-
-        ISwitchVectorProperty OSPECStatusSP;
-        ISwitch OSPECStatusS[5];
-        ISwitchVectorProperty OSPECIndexSP;
-        ISwitch OSPECIndexS[2];
-        ISwitchVectorProperty OSPECRecordSP;
-        ISwitch OSPECRecordS[3];
-        ISwitchVectorProperty OSPECReadSP;
-        ISwitch OSPECReadS[2];
-        INumberVectorProperty OSPECCurrentIndexNP;
-        INumber OSPECCurrentIndexN[2];
-        INumberVectorProperty OSPECUserIndexNP;
-        INumber OSPECUserIndexN[2];
-        INumberVectorProperty OSPECRWValuesNP;
-        INumber OSPECRWValuesN[2]; //Current Index  and User Index
-
-        ISwitchVectorProperty OSNAlignStarsSP;
-        ISwitch OSNAlignStarsS[9];
-        ISwitchVectorProperty OSNAlignSP;
-        ISwitch OSNAlignS[4];
-        ISwitchVectorProperty OSNAlignWriteSP;
-        ISwitch OSNAlignWriteS[1];
-        ISwitchVectorProperty OSNAlignPolarRealignSP;
-        ISwitch OSNAlignPolarRealignS[2];
-        IText OSNAlignT[8] {};
-        ITextVectorProperty OSNAlignTP;
-        IText OSNAlignErrT[4] {};
-        ITextVectorProperty OSNAlignErrTP;
+        INDI::PropertySwitch OSNAlignStarsSP {9};
+        INDI::PropertySwitch OSNAlignSP {2};
+        INDI::PropertySwitch OSNAlignWriteSP {1};
+        INDI::PropertySwitch OSNAlignPolarRealignSP {2};
+        INDI::PropertyText OSNAlignTP {8};
+        INDI::PropertyText OSNAlignErrTP {2};
         char OSNAlignStat[RB_MAX_LEN];
 
-        ISwitchVectorProperty OSOutput1SP;
-        ISwitch OSOutput1S[2];
-        ISwitchVectorProperty OSOutput2SP;
-        ISwitch OSOutput2S[2];
+        // Note: OSOutput1SP and OSOutput2SP are deprecated in favor of OutputPorts_NP
 
-
-        INumber OutputPorts[PORTS_COUNT];
-        INumberVectorProperty OutputPorts_NP;
+        INDI::PropertyNumber OutputPorts_NP {PORTS_COUNT};
         bool OSHasOutputs = true;
 
-        INumber GuideRateN[2];
-        INumberVectorProperty GuideRateNP;
+        INDI::PropertyNumber GuideRateNP {2};
 
         char OSStat[RB_MAX_LEN];
         char OldOSStat[RB_MAX_LEN];
@@ -438,24 +414,17 @@ class LX200_OnStep : public LX200Generic, public INDI::WeatherInterface, public 
         bool OSCpuTemp_good =
             true; //This can fail on some processors and take the timeout before an update, so if it fails, don't check again.
 
-
-        INumberVectorProperty OSSetTemperatureNP;
-        INumber OSSetTemperatureN[1];
-        INumberVectorProperty OSSetHumidityNP;
-        INumber OSSetHumidityN[1];
-        INumberVectorProperty OSSetPressureNP;
-        INumber OSSetPressureN[1];
+        INDI::PropertyNumber OSSetTemperatureNP {1};
+        INDI::PropertyNumber OSSetHumidityNP {1};
+        INDI::PropertyNumber OSSetPressureNP {1};
         //Not sure why this would be used, but will feed to it from site settings
-        INumberVectorProperty OSSetAltitudeNP;
-        INumber OSSetAltitudeN[1];
-
+        INDI::PropertyNumber OSSetAltitudeNP {1};
 
         //This is updated via other commands, as such I'm going to ignore it like some others do.
         virtual IPState updateWeather() override
         {
             return IPS_OK;
         }
-
 
         /**
          * @brief SyncParkStatus Update the state and switches for parking
@@ -477,10 +446,15 @@ class LX200_OnStep : public LX200Generic, public INDI::WeatherInterface, public 
         // #define DEBUG_TRACKSTATE
         void PrintTrackState();
 
+        // A status poll without a :GU# answer is skipped, up to this many in a row. Then the poll fails as before,
+        // so a lost connection is still reported.
+        static constexpr int MAX_MISSED_STATUS_REPLIES = 3;
+        int m_MissedStatusReplies { 0 };
+        // A park that OnStep reports neither as parked ('P') nor as failed ('F') within this time ends with an error.
+        int m_ParkTimeoutSeconds { 300 };
+        std::chrono::steady_clock::time_point m_ParkStartTime;
+
     private:
         int currentCatalog;
         int currentSubCatalog;
-
-
-
 };

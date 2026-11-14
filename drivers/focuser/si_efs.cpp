@@ -39,6 +39,7 @@ const std::map<SIEFS::SI_COMMANDS, std::string> SIEFS::CommandsMap =
     {SIEFS::SI_FAST_IN, "Fast In"},
     {SIEFS::SI_FAST_OUT, "Fast Out"},
     {SIEFS::SI_HALT, "Halt"},
+    {SIEFS::SI_MOTOR_POLARITY, "Motor Polarity"},
 };
 
 const std::map<SIEFS::SI_MOTOR, std::string> SIEFS::MotorMap =
@@ -51,9 +52,13 @@ const std::map<SIEFS::SI_MOTOR, std::string> SIEFS::MotorMap =
 
 SIEFS::SIEFS()
 {
-    setVersion(0, 1);
+    setVersion(0, 2);
 
-    FI::SetCapability(FOCUSER_CAN_ABS_MOVE | FOCUSER_CAN_REL_MOVE | FOCUSER_CAN_ABORT | FOCUSER_CAN_SYNC);
+    FI::SetCapability(FOCUSER_CAN_ABS_MOVE |
+                      FOCUSER_CAN_REL_MOVE |
+                      FOCUSER_CAN_ABORT |
+                      FOCUSER_CAN_SYNC |
+                      FOCUSER_CAN_REVERSE);
     setSupportedConnections(CONNECTION_NONE);
 }
 
@@ -78,21 +83,25 @@ bool SIEFS::Connect()
         bool rc = getMaxPosition(&maximumPosition);
         if (rc)
         {
-            FocusMaxPosN[0].value = maximumPosition;
+            FocusMaxPosNP[0].setValue(maximumPosition);
 
-            FocusAbsPosN[0].min = 0;
-            FocusAbsPosN[0].max = FocusMaxPosN[0].value;
-            FocusAbsPosN[0].step = FocusMaxPosN[0].value / 50.0;
+            FocusAbsPosNP[0].setMin(0);
+            FocusAbsPosNP[0].setMax(FocusMaxPosNP[0].getValue());
+            FocusAbsPosNP[0].setStep(FocusMaxPosNP[0].getValue() / 50.0);
 
-            FocusSyncN[0].min = 0;
-            FocusSyncN[0].max = FocusMaxPosN[0].value;
-            FocusSyncN[0].step = FocusMaxPosN[0].value / 50.0;
+            FocusSyncNP[0].setMin(0);
+            FocusSyncNP[0].setMax(FocusMaxPosNP[0].getValue());
+            FocusSyncNP[0].setStep(FocusMaxPosNP[0].getValue() / 50.0);
 
-            FocusRelPosN[0].max  = FocusMaxPosN[0].value / 2;
-            FocusRelPosN[0].step = FocusMaxPosN[0].value / 100.0;
-            FocusRelPosN[0].min  = 0;
+            FocusRelPosNP[0].setMax(FocusMaxPosNP[0].getValue() / 2);
+            FocusRelPosNP[0].setStep(FocusMaxPosNP[0].getValue() / 100.0);
+            FocusRelPosNP[0].setMin(0);
         }
 
+        bool reversed = isReversed();
+        FocusReverseSP[INDI_ENABLED].setState(reversed ? ISS_ON : ISS_OFF);
+        FocusReverseSP[INDI_DISABLED].setState(reversed ? ISS_OFF : ISS_ON);
+        FocusReverseSP.setState(IPS_OK);
         SetTimer(getCurrentPollingPeriod());
     }
 
@@ -134,43 +143,43 @@ void SIEFS::TimerHit()
     bool rc = getAbsPosition(&currentTicks);
 
     if (rc)
-        FocusAbsPosN[0].value = currentTicks;
+        FocusAbsPosNP[0].setValue(currentTicks);
 
     getStatus();
 
-    if (FocusAbsPosNP.s == IPS_BUSY || FocusRelPosNP.s == IPS_BUSY)
+    if (FocusAbsPosNP.getState() == IPS_BUSY || FocusRelPosNP.getState() == IPS_BUSY)
     {
         if (isSimulation())
         {
-            if (FocusAbsPosN[0].value < targetPosition)
+            if (FocusAbsPosNP[0].getValue() < targetPosition)
                 simPosition += 500;
             else
                 simPosition -= 500;
 
             if (std::abs(simPosition - static_cast<int32_t>(targetPosition)) < 500)
             {
-                FocusAbsPosN[0].value = targetPosition;
-                simPosition = FocusAbsPosN[0].value;
+                FocusAbsPosNP[0].setValue(targetPosition);
+                simPosition = FocusAbsPosNP[0].getValue();
                 m_Motor = SI_NOT_MOVING;
             }
 
-            FocusAbsPosN[0].value = simPosition;
+            FocusAbsPosNP[0].setValue(simPosition);
         }
 
-        if (m_Motor == SI_NOT_MOVING && targetPosition == FocusAbsPosN[0].value)
+        if (m_Motor == SI_NOT_MOVING && targetPosition == FocusAbsPosNP[0].getValue())
         {
-            if (FocusRelPosNP.s == IPS_BUSY)
+            if (FocusRelPosNP.getState() == IPS_BUSY)
             {
-                FocusRelPosNP.s = IPS_OK;
-                IDSetNumber(&FocusRelPosNP, nullptr);
+                FocusRelPosNP.setState(IPS_OK);
+                FocusRelPosNP.apply();
             }
 
-            FocusAbsPosNP.s = IPS_OK;
+            FocusAbsPosNP.setState(IPS_OK);
             LOG_DEBUG("Focuser reached target position.");
         }
     }
 
-    IDSetNumber(&FocusAbsPosNP, nullptr);
+    FocusAbsPosNP.apply();
 
     SetTimer(getCurrentPollingPeriod());
 }
@@ -189,7 +198,7 @@ IPState SIEFS::MoveAbsFocuser(uint32_t targetTicks)
     if (!rc)
         return IPS_ALERT;
 
-    FocusAbsPosNP.s = IPS_BUSY;
+    FocusAbsPosNP.setState(IPS_BUSY);
 
     return IPS_BUSY;
 }
@@ -197,13 +206,13 @@ IPState SIEFS::MoveAbsFocuser(uint32_t targetTicks)
 IPState SIEFS::MoveRelFocuser(FocusDirection dir, uint32_t ticks)
 {
     int direction = (dir == FOCUS_INWARD) ? -1 : 1;
-    int reversed = (FocusReverseS[INDI_ENABLED].s == ISS_ON) ? -1 : 1;
+    int reversed = (FocusReverseSP[INDI_ENABLED].getState() == ISS_ON) ? -1 : 1;
     int relative = static_cast<int>(ticks);
 
-    int targetAbsPosition = FocusAbsPosN[0].value + (relative * direction * reversed);
+    int targetAbsPosition = FocusAbsPosNP[0].getValue() + (relative * direction * reversed);
 
-    targetAbsPosition = std::min(static_cast<uint32_t>(FocusMaxPosN[0].value)
-                                 , static_cast<uint32_t>(std::max(static_cast<int>(FocusAbsPosN[0].min), targetAbsPosition)));
+    targetAbsPosition = std::min(static_cast<uint32_t>(FocusMaxPosNP[0].getValue())
+                                 , static_cast<uint32_t>(std::max(static_cast<int>(FocusAbsPosNP[0].getMin()), targetAbsPosition)));
 
     return MoveAbsFocuser(targetAbsPosition);
 }
@@ -538,4 +547,94 @@ bool SIEFS::SetFocuserMaxPosition(uint32_t ticks)
     rc = sendCommand(SI_MAX_POS);
 
     return rc;
+}
+
+bool SIEFS::ReverseFocuser(bool enabled)
+{
+    return setReversed(enabled);
+}
+
+bool SIEFS::setReversed(bool enabled)
+{
+    int rc = 0;
+    uint8_t command[2] = {0};
+    uint8_t response[2] = {0};
+
+    command[0] = SI_MOTOR_POLARITY;
+    command[1] = enabled ? 1 : 0;
+
+    LOGF_DEBUG("CMD <%02X> <%02X>", command[0], command[1]);
+
+    if (isSimulation())
+        rc = 1;
+    else
+        rc = hid_write(handle, command, 2);
+
+    if (rc < 0)
+    {
+        LOGF_ERROR("setReversed: Error writing to device (%s)", hid_error(handle));
+        return false;
+    }
+
+    if (isSimulation())
+    {
+        rc = 2;
+        response[0] = command[0];
+        // Normal
+        response[1] = 0;
+    }
+    else
+        rc = hid_read_timeout(handle, response, 2, SI_TIMEOUT);
+
+    if (rc < 0)
+    {
+        LOGF_ERROR("setReversed: Error reading from device (%s)", hid_error(handle));
+        return false;
+    }
+
+    LOGF_DEBUG("RES <%02X %02X>", response[0], response[1]);
+
+    return true;
+}
+
+bool SIEFS::isReversed()
+{
+    int rc = 0;
+    uint8_t command[1] = {0};
+    uint8_t response[2] = {0};
+
+    command[0] = SI_MOTOR_POLARITY;
+
+    LOGF_DEBUG("CMD <%02X>", command[0]);
+
+    if (isSimulation())
+        rc = 1;
+    else
+        rc = hid_write(handle, command, 1);
+
+    if (rc < 0)
+    {
+        LOGF_ERROR("setReversed: Error writing to device (%s)", hid_error(handle));
+        return false;
+    }
+
+    if (isSimulation())
+    {
+        rc = 2;
+        response[0] = command[0];
+        // Normal
+        response[1] = 0;
+    }
+    else
+        rc = hid_read_timeout(handle, response, 2, SI_TIMEOUT);
+
+    if (rc < 0)
+    {
+        LOGF_ERROR("setReversed: Error reading from device (%s)", hid_error(handle));
+        return false;
+    }
+
+    LOGF_DEBUG("RES <%02X %02X>", response[0], response[1]);
+
+    return response[1] != 0;
 }

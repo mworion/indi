@@ -107,10 +107,6 @@ bool Receiver::ISNewNumber(const char *dev, const char *name, double values[], c
     {
         IDSetNumber(&ReceiverSettingsNP, nullptr);
     }
-    if (dev && !strcmp(dev, getDeviceName()) && !strcmp(name, ReceiverSettingsNP.name))
-    {
-        IDSetNumber(&ReceiverSettingsNP, nullptr);
-    }
     return processNumber(dev, name, values, names, n);
 }
 
@@ -159,6 +155,17 @@ void Receiver::setFrequency(double freq)
     ReceiverSettingsN[Receiver::RECEIVER_FREQUENCY].value = freq;
 
     IDSetNumber(&ReceiverSettingsNP, nullptr);
+
+}
+
+void Receiver::setBPS(int BPS)
+{
+    BitsPerSample = BPS;
+
+    ReceiverSettingsN[Receiver::RECEIVER_BITSPERSAMPLE].value = BitsPerSample;
+
+    IDSetNumber(&ReceiverSettingsNP, nullptr);
+    SensorInterface::setBPS(BPS);
 }
 
 void Receiver::SetReceiverCapability(uint32_t cap)

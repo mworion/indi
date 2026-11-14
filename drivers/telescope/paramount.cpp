@@ -68,16 +68,17 @@ std::unique_ptr<Paramount> paramount_mount(new Paramount());
 #define SLEWMODES 9
 const double slewspeeds[SLEWMODES] = { 1.0, 2.0, 4.0, 8.0, 32.0, 64.0, 128.0, 256.0, 512.0 };
 
-Paramount::Paramount()
+Paramount::Paramount(): GI(this)
 {
-    setVersion(1, 4);
+    setVersion(1, 5);
 
     DBG_SCOPE = INDI::Logger::getInstance().addDebugLevel("Scope Verbose", "SCOPE");
 
     SetTelescopeCapability(TELESCOPE_CAN_PARK | TELESCOPE_CAN_SYNC | TELESCOPE_CAN_GOTO | TELESCOPE_CAN_ABORT |
                            TELESCOPE_HAS_TIME | TELESCOPE_HAS_LOCATION | TELESCOPE_HAS_TRACK_MODE | TELESCOPE_HAS_TRACK_RATE |
-                           TELESCOPE_CAN_CONTROL_TRACK | TELESCOPE_HAS_PIER_SIDE,
-                           9);
+                           TELESCOPE_CAN_CONTROL_TRACK | TELESCOPE_HAS_PIER_SIDE | TELESCOPE_CAN_HOME_GO,
+                           9
+                          );
     setTelescopeConnection(CONNECTION_TCP);
 
     m_NSTimer.setSingleShot(true);
@@ -86,16 +87,18 @@ Paramount::Paramount()
     // Called when timer is up
     m_NSTimer.callOnTimeout([this]()
     {
-        GuideNSNP.s = IPS_IDLE;
-        GuideNSN[0].value = GuideNSN[1].value = 0;
-        IDSetNumber(&GuideNSNP, nullptr);
+        GuideNSNP.setState(IPS_IDLE);
+        GuideNSNP[0].setValue(0);
+        GuideNSNP[1].setValue(0);
+        GuideNSNP.apply();
     });
 
     m_WETimer.callOnTimeout([this]()
     {
-        GuideWENP.s = IPS_IDLE;
-        GuideWEN[0].value = GuideWEN[1].value = 0;
-        IDSetNumber(&GuideWENP, nullptr);
+        GuideNSNP.setState(IPS_IDLE);
+        GuideWENP[0].setValue(0);
+        GuideWENP[1].setValue(0);
+        GuideWENP.apply();
     });
 }
 
@@ -109,14 +112,15 @@ bool Paramount::initProperties()
     /* Make sure to init parent properties first */
     INDI::Telescope::initProperties();
 
-    for (int i = 0; i < SlewRateSP.nsp - 1; i++)
+    for (size_t i = 0; i < SlewRateSP.count() - 1; i++)
     {
-        sprintf(SlewRateSP.sp[i].label, "%.fx", slewspeeds[i]);
-        SlewRateSP.sp[i].aux = (void *)&slewspeeds[i];
+        SlewRateSP[i].setLabel(std::to_string(slewspeeds[i]) + "x");
+
+        SlewRateSP[i].setAux((void *)&slewspeeds[i]);
     }
 
     // Set 64x as default speed
-    SlewRateSP.sp[5].s = ISS_ON;
+    SlewRateSP[5].setState(ISS_ON);
 
     /* How fast do we guide compared to sidereal rate */
     IUFillNumber(&JogRateN[RA_AXIS], "JOG_RATE_WE", "W/E Rate (arcmin)", "%g", 0, 600, 60, 30);
@@ -131,33 +135,28 @@ bool Paramount::initProperties()
                        IPS_IDLE);
 
     // Homing
-    IUFillSwitch(&HomeS[0], "GO", "Go", ISS_OFF);
-    IUFillSwitchVector(&HomeSP, HomeS, 1, getDeviceName(), "TELESCOPE_HOME", "Homing", MAIN_CONTROL_TAB, IP_RW, ISR_ATMOST1, 60,
-                       IPS_IDLE);
+    // IUFillSwitch(&HomeS[0], "GO", "Go", ISS_OFF);
+    // IUFillSwitchVector(&HomeSP, HomeS, 1, getDeviceName(), "TELESCOPE_HOME", "Home", MAIN_CONTROL_TAB, IP_RW, ISR_ATMOST1, 60,
+    //                    IPS_IDLE);
+
     // Tracking Mode
     AddTrackMode("TRACK_SIDEREAL", "Sidereal", true);
     AddTrackMode("TRACK_SOLAR", "Solar");
     AddTrackMode("TRACK_LUNAR", "Lunar");
     AddTrackMode("TRACK_CUSTOM", "Custom");
 
-    // Let's simulate it to be an F/7.5 120mm telescope with 50m 175mm guide scope
-    ScopeParametersN[0].value = 120;
-    ScopeParametersN[1].value = 900;
-    ScopeParametersN[2].value = 50;
-    ScopeParametersN[3].value = 175;
-
     TrackState = SCOPE_IDLE;
 
     SetParkDataType(PARK_HA_DEC);
 
-    initGuiderProperties(getDeviceName(), MOTION_TAB);
+    GI::initProperties(MOTION_TAB);
 
     setDriverInterface(getDriverInterface() | GUIDER_INTERFACE);
 
     addAuxControls();
 
-    currentRA  = get_local_sidereal_time(LocationN[LOCATION_LONGITUDE].value);
-    currentDEC = LocationN[LOCATION_LATITUDE].value > 0 ? 90 : -90;
+    currentRA  = get_local_sidereal_time(LocationNP[LOCATION_LONGITUDE].getValue());
+    currentDEC = LocationNP[LOCATION_LATITUDE].getValue() > 0 ? 90 : -90;
     return true;
 }
 
@@ -184,8 +183,6 @@ bool Paramount::updateProperties()
 
         defineProperty(&JogRateNP);
 
-        defineProperty(&GuideNSNP);
-        defineProperty(&GuideWENP);
         defineProperty(&GuideRateNP);
 
         // Initial HA to 0 and currentDEC (+90 or -90)
@@ -205,8 +202,6 @@ bool Paramount::updateProperties()
         }
 
         SetParked(isTheSkyParked());
-
-        defineProperty(&HomeSP);
     }
     else
     {
@@ -215,11 +210,10 @@ bool Paramount::updateProperties()
 
         deleteProperty(JogRateNP.name);
 
-        deleteProperty(GuideNSNP.name);
-        deleteProperty(GuideWENP.name);
         deleteProperty(GuideRateNP.name);
-        deleteProperty(HomeSP.name);
     }
+
+    GI::updateProperties();
 
     return true;
 }
@@ -230,7 +224,7 @@ bool Paramount::updateProperties()
 *
 *    |No error. Error = 0.
 *
-* This is true everwhere except for the Handshake(), which just returns "1" on success.
+* This is true everywhere except for the Handshake(), which just returns "1" on success.
 *
 * In order to know when the response is complete, we append the # character in
 * Javascript commands and read from the port until the # character is reached.
@@ -368,11 +362,12 @@ bool Paramount::ReadScopeStatus()
         {
             TrackState = SCOPE_TRACKING;
 
-            if (HomeSP.s == IPS_BUSY)
+            if (HomeSP.getState() == IPS_BUSY)
             {
-                IUResetSwitch(&HomeSP);
-                HomeSP.s = IPS_OK;
+                HomeSP.reset();
+                HomeSP.setState(IPS_OK);
                 LOG_INFO("Finding home completed.");
+                HomeSP.apply();
             }
             else
                 LOG_INFO("Slew is complete. Tracking...");
@@ -552,7 +547,7 @@ bool Paramount::Sync(double ra, double dec)
 
     LOG_INFO("Sync is successful.");
 
-    EqNP.s = IPS_OK;
+    EqNP.setState(IPS_OK);
 
     NewRaDec(currentRA, currentDEC);
 
@@ -562,7 +557,7 @@ bool Paramount::Sync(double ra, double dec)
 bool Paramount::Park()
 {
     double targetHA = GetAxis1Park();
-    targetRA  = range24(get_local_sidereal_time(LocationN[LOCATION_LONGITUDE].value) - targetHA);
+    targetRA  = range24(get_local_sidereal_time(LocationNP[LOCATION_LONGITUDE].getValue()) - targetHA);
     targetDEC = GetAxis2Park();
 
     char pCMD[MAXRBUF] = {0};
@@ -597,6 +592,10 @@ bool Paramount::UnPark()
 
 bool Paramount::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
 {
+    // Check guider interface
+    if (GI::processNumber(dev, name, values, names, n))
+        return true;
+
     //  first check if it's for our device
     if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
     {
@@ -616,45 +615,10 @@ bool Paramount::ISNewNumber(const char *dev, const char *name, double values[], 
             IDSetNumber(&GuideRateNP, nullptr);
             return true;
         }
-
-        if (strcmp(name, GuideNSNP.name) == 0 || strcmp(name, GuideWENP.name) == 0)
-        {
-            processGuiderProperties(name, values, names, n);
-            return true;
-        }
     }
 
     //  if we didn't process it, continue up the chain, let somebody else give it a shot
     return INDI::Telescope::ISNewNumber(dev, name, values, names, n);
-}
-
-bool Paramount::ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n)
-{
-    if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
-    {
-        if (!strcmp(HomeSP.name, name))
-        {
-            LOG_INFO("Moving to home position. Please stand by...");
-            if (findHome())
-            {
-                HomeS[0].s = ISS_OFF;
-                TrackState = SCOPE_IDLE;
-                HomeSP.s = IPS_OK;
-                LOG_INFO("Mount arrived at home position.");
-            }
-            else
-            {
-                HomeS[0].s = ISS_OFF;
-                HomeSP.s = IPS_ALERT;
-                LOG_ERROR("Failed to go to home position");
-            }
-
-            IDSetSwitch(&HomeSP, nullptr);
-            return true;
-        }
-    }
-
-    return INDI::Telescope::ISNewSwitch(dev, name, states, names, n);
 }
 
 bool Paramount::Abort()
@@ -687,7 +651,7 @@ bool Paramount::MoveNS(INDI_DIR_NS dir, TelescopeMotionCommand command)
 
     int motion = (dir == DIRECTION_NORTH) ? PARAMOUNT_NORTH : PARAMOUNT_SOUTH;
     //int rate   = IUFindOnSwitchIndex(&SlewRateSP);
-    int rate = slewspeeds[IUFindOnSwitchIndex(&SlewRateSP)];
+    int rate = slewspeeds[SlewRateSP.findOnSwitchIndex()];
 
     switch (command)
     {
@@ -725,7 +689,7 @@ bool Paramount::MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command)
     }
 
     int motion = (dir == DIRECTION_WEST) ? PARAMOUNT_WEST : PARAMOUNT_EAST;
-    int rate   = IUFindOnSwitchIndex(&SlewRateSP);
+    int rate   = SlewRateSP.findOnSwitchIndex();
 
     switch (command)
     {
@@ -785,7 +749,7 @@ bool Paramount::SetCurrentPark()
     if (!sendTheSkyOKCommand(pCMD, "Setting Park Position"))
         return false;
 
-    double lst = get_local_sidereal_time(LocationN[LOCATION_LONGITUDE].value);
+    double lst = get_local_sidereal_time(LocationNP[LOCATION_LONGITUDE].getValue());
     double ha  = get_local_hour_angle(lst, currentRA);
 
     SetAxis1Park(ha);
@@ -800,7 +764,7 @@ bool Paramount::SetDefaultPark()
     SetAxis1Park(0);
 
     // Set DEC to 90 or -90 depending on the hemisphere
-    SetAxis2Park((LocationN[LOCATION_LATITUDE].value > 0) ? 90 : -90);
+    SetAxis2Park((LocationNP[LOCATION_LATITUDE].getValue() > 0) ? 90 : -90);
 
     return true;
 }
@@ -852,9 +816,9 @@ void Paramount::mountSim()
 
     double motionRate = 0;
 
-    if (MovementNSSP.s == IPS_BUSY)
+    if (MovementNSSP.getState() == IPS_BUSY)
         motionRate = JogRateN[0].value;
-    else if (MovementWESP.s == IPS_BUSY)
+    else if (MovementWESP.getState() == IPS_BUSY)
         motionRate = JogRateN[1].value;
 
     if (motionRate != 0)
@@ -862,12 +826,12 @@ void Paramount::mountSim()
         da_ra  = motionRate * dt * 0.05;
         da_dec = motionRate * dt * 0.05;
 
-        switch (MovementNSSP.s)
+        switch (MovementNSSP.getState())
         {
             case IPS_BUSY:
-                if (MovementNSS[DIRECTION_NORTH].s == ISS_ON)
+            if (MovementNSSP[DIRECTION_NORTH].getState() == ISS_ON)
                     currentDEC += da_dec;
-                else if (MovementNSS[DIRECTION_SOUTH].s == ISS_ON)
+            else if (MovementNSSP[DIRECTION_SOUTH].getState() == ISS_ON)
                     currentDEC -= da_dec;
                 break;
 
@@ -875,12 +839,12 @@ void Paramount::mountSim()
                 break;
         }
 
-        switch (MovementWESP.s)
+            switch (MovementWESP.getState())
         {
             case IPS_BUSY:
-                if (MovementWES[DIRECTION_WEST].s == ISS_ON)
+                if (MovementWESP[DIRECTION_WEST].getState() == ISS_ON)
                     currentRA += da_ra / 15.;
-                else if (MovementWES[DIRECTION_EAST].s == ISS_ON)
+                else if (MovementWESP[DIRECTION_EAST].getState() == ISS_ON)
                     currentRA -= da_ra / 15.;
                 break;
 
@@ -892,7 +856,7 @@ void Paramount::mountSim()
         return;
     }
 
-    /* Process per current state. We check the state of EQUATORIAL_COORDS and act acoordingly */
+    /* Process per current state. We check the state of EQUATORIAL_COORDS and act accordingly */
     switch (TrackState)
     {
         case SCOPE_IDLE:
@@ -1090,8 +1054,8 @@ bool Paramount::SetTrackMode(uint8_t mode)
         dRA = TRACKRATE_LUNAR;
     else if (mode == TRACK_CUSTOM)
     {
-        dRA = TrackRateN[RA_AXIS].value;
-        dDE = TrackRateN[DEC_AXIS].value;
+        dRA = TrackRateNP[RA_AXIS].getValue();
+        dDE = TrackRateNP[DEC_AXIS].getValue();
     }
     return setTheSkyTracking(true, isSidereal, dRA, dDE);
 }
@@ -1104,4 +1068,17 @@ bool Paramount::SetTrackEnabled(bool enabled)
     else
         // Otherwise, simply switch everything off
         return setTheSkyTracking(0, 0, 0., 0.);
+}
+
+IPState Paramount::ExecuteHomeAction(TelescopeHomeAction action)
+{
+    switch (action)
+    {
+        case HOME_GO:
+            LOG_INFO("Moving to home position. Please stand by...");
+            return findHome() ? IPS_BUSY : IPS_ALERT;
+
+        default:
+            return IPS_ALERT;
+    }
 }

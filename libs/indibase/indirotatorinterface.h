@@ -21,6 +21,8 @@
 #pragma once
 
 #include "indibase.h"
+#include "indipropertynumber.h"
+#include "indipropertyswitch.h"
 #include <stdint.h>
 
 using RI = INDI::RotatorInterface;
@@ -33,9 +35,9 @@ using RI = INDI::RotatorInterface;
    pure virtual functions. Only absolute position Rotators are supported. Angle is ranged from 0 to 360 increasing clockwise when looking at the back
    of the camera.
 
-   \e IMPORTANT: initRotatorProperties() must be called before any other function to initilize the Rotator properties.
+   \e IMPORTANT: initRotatorProperties() must be called before any other function to initialize the Rotator properties.
 
-   \e IMPORTANT: processRotatorNumber() must be called in your driver's ISNewNumber() function. Similary, processRotatorSwitch() must be called in ISNewSwitch()
+   \e IMPORTANT: processRotatorNumber() must be called in your driver's ISNewNumber() function. Similarly, processRotatorSwitch() must be called in ISNewSwitch()
 
 \author Jasem Mutlaq
 */
@@ -121,7 +123,7 @@ class RotatorInterface
         explicit RotatorInterface(DefaultDevice *defaultDevice);
 
         /**
-         * \brief Initilize Rotator properties. It is recommended to call this function within
+         * \brief Initialize Rotator properties. It is recommended to call this function within
          * initProperties() of your primary device
          * \param groupName Group or tab name to be used to define Rotator properties.
          */
@@ -194,28 +196,33 @@ class RotatorInterface
         bool saveConfigItems(FILE * fp);
 
 
-        INumber GotoRotatorN[1];
-        INumberVectorProperty GotoRotatorNP;
+        // Goto rotator angle
+        INDI::PropertyNumber GotoRotatorNP {1};
 
-        INumber SyncRotatorN[1];
-        INumberVectorProperty SyncRotatorNP;
+        // Sync rotator angle
+        INDI::PropertyNumber SyncRotatorNP {1};
 
-        ISwitch AbortRotatorS[1];
-        ISwitchVectorProperty AbortRotatorSP;
+        // Abort rotator motion
+        INDI::PropertySwitch AbortRotatorSP {1};
 
-        ISwitch HomeRotatorS[1];
-        ISwitchVectorProperty HomeRotatorSP;
+        // Home rotator
+        INDI::PropertySwitch HomeRotatorSP {1};
 
-        ISwitch ReverseRotatorS[2];
-        ISwitchVectorProperty ReverseRotatorSP;
+        // Reverse rotator direction
+        INDI::PropertySwitch ReverseRotatorSP {2};
 
-        // Backlash toogle
-        ISwitchVectorProperty RotatorBacklashSP;
-        ISwitch RotatorBacklashS[2];
+        // Backlash toggle
+        INDI::PropertySwitch RotatorBacklashSP {2};
 
         // Backlash steps
-        INumberVectorProperty RotatorBacklashNP;
-        INumber RotatorBacklashN[1];
+        INDI::PropertyNumber RotatorBacklashNP {1};
+
+        // Rotator Limits
+        INDI::PropertyNumber RotatorLimitsNP {1};
+        // Fixed reference angle (set at connect time and updated on sync).
+        // The limit check prevents the rotator from moving more than ±(limit/2)°
+        // away from this point, protecting against cable wrap.
+        double m_RotatorOffset {-1};  // -1 means "not yet initialized"
 
         uint32_t rotatorCapability = 0;
         DefaultDevice *m_defaultDevice { nullptr };

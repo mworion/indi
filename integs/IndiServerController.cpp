@@ -18,36 +18,86 @@
 
 #include <system_error>
 #include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #include "utils.h"
 #include "IndiServerController.h"
 
 
-#define TEST_TCP_PORT 17624
-#define TEST_UNIX_SOCKET "/tmp/indi-test-server"
-#define STRINGIFY_TOK(x) #x
-#define TO_STRING(x) STRINGIFY_TOK(x)
+IndiServerController::IndiServerController() {
+    fifo = false;
+    // Use resources unique to this process so that tests can run in parallel
+    unixSocketPath = uniqueTestName("/tmp/indi-test-server");
+    fifoPath = uniqueTestName("/tmp/indi-test-fifo");
+    tcpPort = findFreeTcpPort();
+}
+
+IndiServerController::~IndiServerController() {
+    // Abort any pending indi server
+    kill();
+    join();
+    if (fifo) {
+        unlink(fifoPath.c_str());
+    }
+}
+
+
+void IndiServerController::setFifo(bool fifo) {
+    this->fifo = fifo;
+}
 
 void IndiServerController::start(const std::vector<std::string> & args) {
-    ProcessController::start("../indiserver", args);
+    ProcessController::start(INDISERVER_PATH, args);
 }
 
 void IndiServerController::startDriver(const std::string & path) {
-    std::vector<std::string> args = { "-p", TO_STRING(TEST_TCP_PORT), "-r", "0", "-vvv" };
+    std::vector<std::string> args = { "-p", std::to_string(tcpPort), "-r", "0", "-vvv" };
 #ifdef ENABLE_INDI_SHARED_MEMORY
     args.push_back("-u");
-    args.push_back(TEST_UNIX_SOCKET);
+    args.push_back(unixSocketPath);
 #endif
+
+    if (fifo) {
+        unlink(fifoPath.c_str());
+        if (mkfifo(fifoPath.c_str(), 0600) == -1) {
+            throw std::system_error(errno, std::generic_category(), "mkfifo");
+        }
+        args.push_back("-f");
+        args.push_back(fifoPath);
+    }
     args.push_back(path);
 
     start(args);
 }
 
+void IndiServerController::addDriver(const std::string & driver) {
+    if (!fifo) {
+        throw new std::runtime_error("Fifo is not enabled - cannot add driver");
+    }
+
+    int fifoFd = open(fifoPath.c_str(), O_WRONLY);
+    if (fifoFd == -1) {
+        throw std::system_error(errno, std::generic_category(), "opening fifo");
+    }
+
+    std::string cmd = "start " + driver +"\n";
+    int wr = write(fifoFd, cmd.data(), cmd.length());
+    if (wr == -1) {
+        auto e = errno;
+        close(fifoFd);
+        throw std::system_error(e, std::generic_category(), "write to fifo");
+    }
+
+    close(fifoFd);
+}
+
 std::string IndiServerController::getUnixSocketPath() const {
-    return TEST_UNIX_SOCKET;
+    return unixSocketPath;
 }
 
 int IndiServerController::getTcpPort() const {
-  return TEST_TCP_PORT;
+  return tcpPort;
 }
 

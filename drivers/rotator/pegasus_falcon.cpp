@@ -20,10 +20,14 @@
 
   The full GNU General Public License is included in this distribution in the
   file called LICENSE.
+
+  Corrections by T. Schriber 2022 following
+  'Falcon Rotator Serial Command Language Firmware >=v.1.3 (review Sep 2020)'
 *******************************************************************************/
 
 #include "pegasus_falcon.h"
 #include "indicom.h"
+#include "connectionplugins/connectionserial.h"
 
 #include <cmath>
 #include <memory>
@@ -53,25 +57,26 @@ bool PegasusFalcon::initProperties()
                   ROTATOR_CAN_SYNC);
 
     addAuxControls();
+    serialConnection->setPortMatchPattern("Falcon");
 
     ////////////////////////////////////////////////////////////////////////////
     /// Main Control Panel
     ////////////////////////////////////////////////////////////////////////////
     // Reload Firmware
-    IUFillSwitch(&ReloadFirmwareS[0], "RELOAD", "Reload", ISS_OFF);
-    IUFillSwitchVector(&ReloadFirmwareSP, ReloadFirmwareS, 1, getDeviceName(), "RELOAD_FIRMWARE", "Firmware", MAIN_CONTROL_TAB,
-                       IP_RW, ISR_ATMOST1,
-                       60, IPS_IDLE);
+    ReloadFirmwareSP[0].fill("RELOAD", "Reload", ISS_OFF);
+    ReloadFirmwareSP.fill(getDeviceName(), "RELOAD_FIRMWARE", "Firmware", MAIN_CONTROL_TAB,
+                          IP_RW, ISR_ATMOST1,
+                          60, IPS_IDLE);
 
     // Derotate
-    IUFillNumber(&DerotateN[0], "INTERVAL", "Interval (ms)", "%.f", 0, 10000, 1000, 0);
-    IUFillNumberVector(&DerotateNP, DerotateN, 1, getDeviceName(), "ROTATOR_DEROTATE", "Derotation", MAIN_CONTROL_TAB, IP_RW,
-                       60, IPS_IDLE);
+    DerotateNP[0].fill("INTERVAL", "Interval (ms)", "%.f", 0, 10000, 1000, 0);
+    DerotateNP.fill(getDeviceName(), "ROTATOR_DEROTATE", "Derotation", MAIN_CONTROL_TAB, IP_RW,
+                    60, IPS_IDLE);
 
     // Firmware
-    IUFillText(&FirmwareT[0], "VERSION", "Version", "NA");
-    IUFillTextVector(&FirmwareTP, FirmwareT, 1, getDeviceName(), "FIRMWARE_INFO", "Firmware", MAIN_CONTROL_TAB, IP_RO, 60,
-                     IPS_IDLE);
+    FirmwareTP[0].fill("VERSION", "Version", "NA");
+    FirmwareTP.fill(getDeviceName(), "FIRMWARE_INFO", "Firmware", MAIN_CONTROL_TAB, IP_RO, 60,
+                    IPS_IDLE);
 
     return true;
 }
@@ -83,17 +88,17 @@ bool PegasusFalcon::updateProperties()
     if (isConnected())
     {
         // Main Control
-        defineProperty(&DerotateNP);
-        defineProperty(&FirmwareTP);
-        defineProperty(&ReloadFirmwareSP);
+        defineProperty(DerotateNP);
+        defineProperty(FirmwareTP);
+        defineProperty(ReloadFirmwareSP);
 
     }
     else
     {
         // Main Control
-        deleteProperty(DerotateNP.name);
-        deleteProperty(FirmwareTP.name);
-        deleteProperty(ReloadFirmwareSP.name);
+        deleteProperty(DerotateNP);
+        deleteProperty(FirmwareTP);
+        deleteProperty(ReloadFirmwareSP);
     }
 
     return true;
@@ -120,24 +125,35 @@ bool PegasusFalcon::ISNewNumber(const char *dev, const char *name, double values
     if (dev && !strcmp(dev, getDeviceName()))
     {
         // De-rotation
-        if (!strcmp(name, DerotateNP.name))
+        if (DerotateNP.isNameMatch(name))
         {
             const uint32_t ms = static_cast<uint32_t>(values[0]);
             if (setDerotation(ms))
             {
-                DerotateN[0].value = values[0];
+                DerotateNP[0].setValue(values[0]);
                 if (values[0] > 0)
                     LOGF_INFO("De-rotation is enabled and set to 1 step per %u milliseconds.", ms);
                 else
                     LOG_INFO("De-rotaiton is disabled.");
+                DerotateNP.setState(IPS_OK);
             }
             else
-                DerotateNP.s = IPS_ALERT;
-            IDSetNumber(&DerotateNP, nullptr);
+                DerotateNP.setState(IPS_ALERT);
+            DerotateNP.apply();
             return true;
         }
+        // Firmware 1.4 bug:
+        // If new angle differs 0.01° the rotator sometimes reports success even though there was no movement!
+        else if (!strcmp(name, "ABS_ROTATOR_ANGLE"))
+        {
+            if (std::abs(values[0] - GotoRotatorNP[0].getValue()) <= 0.01)
+            {
+                GotoRotatorNP.setState(IPS_OK);
+                GotoRotatorNP.apply();
+                return true;
+            }
+        }
     }
-
     return Rotator::ISNewNumber(dev, name, values, names, n);
 }
 
@@ -149,10 +165,10 @@ bool PegasusFalcon::ISNewSwitch(const char * dev, const char * name, ISState * s
     if (dev && !strcmp(dev, getDeviceName()))
     {
         // ReloadFirmware
-        if (!strcmp(name, ReloadFirmwareSP.name))
+        if (ReloadFirmwareSP.isNameMatch(name))
         {
-            ReloadFirmwareSP.s = reloadFirmware() ? IPS_OK : IPS_ALERT;
-            IDSetSwitch(&ReloadFirmwareSP, nullptr);
+            ReloadFirmwareSP.setState(reloadFirmware() ? IPS_OK : IPS_ALERT);
+            ReloadFirmwareSP.apply();
             LOG_INFO("Reloading firmware...");
             return true;
         }
@@ -162,7 +178,7 @@ bool PegasusFalcon::ISNewSwitch(const char * dev, const char * name, ISState * s
 }
 
 //////////////////////////////////////////////////////////////////////
-///
+/// move to degrees (Command "MD:nn.nn"; Response "MD:nn.nn")
 //////////////////////////////////////////////////////////////////////
 IPState PegasusFalcon::MoveRotator(double angle)
 {
@@ -170,7 +186,8 @@ IPState PegasusFalcon::MoveRotator(double angle)
     snprintf(cmd, DRIVER_LEN, "MD:%.2f", angle);
     if (sendCommand(cmd, res))
     {
-        return (!strcmp(res, cmd) ? IPS_BUSY : IPS_ALERT);
+        return (!strncmp(res, cmd, 8) ? IPS_BUSY : IPS_ALERT);
+        //Restrict length to 8 chars for correct compare
     }
 
     return IPS_ALERT;
@@ -191,15 +208,15 @@ bool PegasusFalcon::AbortRotator()
 }
 
 //////////////////////////////////////////////////////////////////////
-///
+/// reverse action ("FN:0" disabled, "FN:1" enabled)
 //////////////////////////////////////////////////////////////////////
 bool PegasusFalcon::ReverseRotator(bool enabled)
 {
     char cmd[DRIVER_LEN] = {0}, res[DRIVER_LEN] = {0};
-    snprintf(cmd, DRIVER_LEN, "FR:%d", enabled ? 1 : 0);
+    snprintf(cmd, DRIVER_LEN, "FN:%d", enabled ? 1 : 0);
     if (sendCommand(cmd, res))
     {
-        return (!strcmp(res, cmd));
+        return (!strncmp(res, cmd, 4)); //Restrict length to 4 chars!
     }
 
     return false;
@@ -239,7 +256,7 @@ bool PegasusFalcon::setDerotation(uint32_t ms)
 bool PegasusFalcon::saveConfigItems(FILE * fp)
 {
     INDI::Rotator::saveConfigItems(fp);
-    IUSaveConfigNumber(fp, &DerotateNP);
+    DerotateNP.save(fp);
     return true;
 }
 
@@ -262,7 +279,7 @@ bool PegasusFalcon::getFirmware()
     char res[DRIVER_LEN] = {0};
     if (sendCommand("FV", res))
     {
-        IUSaveText(&FirmwareT[0], res + 3);
+        FirmwareTP[0].setText(res + 3);
         return true;
     }
 
@@ -293,32 +310,32 @@ bool PegasusFalcon::getStatusData()
         const IPState motionState = std::stoi(result[3]) == 1 ? IPS_BUSY : IPS_OK;
 
         // Update Absolute Position property if either position changes, or status changes.
-        if (std::abs(position - GotoRotatorN[0].value) > 0.01 || GotoRotatorNP.s != motionState)
+        if (std::abs(position - GotoRotatorNP[0].getValue()) > 0.01 || GotoRotatorNP.getState() != motionState)
         {
-            GotoRotatorN[0].value = position;
-            GotoRotatorNP.s = motionState;
-            IDSetNumber(&GotoRotatorNP, nullptr);
+            GotoRotatorNP[0].setValue(position);
+            GotoRotatorNP.setState(motionState);
+            GotoRotatorNP.apply();
         }
 
         // TODO add this later to properties (Light?)
         //const bool limit = std::stoi(result[4]) == 1;
 
         const bool derotation = std::stoi(result[5]) == 1;
-        const bool wasDerotated = DerotateN[0].value > 0;
+        const bool wasDerotated = DerotateNP[0].getValue() > 0;
         // TODO check if we get value from firmware
         if (derotation != wasDerotated)
         {
-            DerotateNP.s = derotation ? IPS_BUSY : IPS_IDLE;;
-            IDSetNumber(&DerotateNP, nullptr);
+            DerotateNP.setState(derotation ? IPS_BUSY : IPS_IDLE);
+            DerotateNP.apply();
         }
 
         const bool reversed = std::stoi(result[6]) == 1;
-        const bool wasReversed = ReverseRotatorS[INDI_ENABLED].s == ISS_ON;
+        const bool wasReversed = ReverseRotatorSP[INDI_ENABLED].getState() == ISS_ON;
         if (reversed != wasReversed)
         {
-            ReverseRotatorS[INDI_ENABLED].s = reversed ? ISS_ON : ISS_OFF;
-            ReverseRotatorS[INDI_DISABLED].s = reversed ? ISS_OFF : ISS_ON;
-            IDSetSwitch(&ReverseRotatorSP, nullptr);
+            ReverseRotatorSP[INDI_ENABLED].setState(reversed ? ISS_ON : ISS_OFF);
+            ReverseRotatorSP[INDI_DISABLED].setState(reversed ? ISS_OFF : ISS_ON);
+            ReverseRotatorSP.apply();
         }
 
         lastStatusData = result;
@@ -431,5 +448,5 @@ void PegasusFalcon::cleanupResponse(char *response)
     {
         return std::isspace(x);
     }), s.end());
-    strncpy(response, s.c_str(), DRIVER_LEN);
+    snprintf(response, DRIVER_LEN, "%s", s.c_str());
 }

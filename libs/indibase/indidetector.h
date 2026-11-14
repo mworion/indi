@@ -22,10 +22,6 @@
 #include "dsp.h"
 #include <fitsio.h>
 
-#ifdef HAVE_WEBSOCKET
-#include "indiwsserver.h"
-#endif
-
 #include <fitsio.h>
 
 #include <memory>
@@ -138,7 +134,7 @@ class Detector : public SensorInterface
         }
 
         /**
-         * @brief SetDetectorCapability Set the Detector capabilities. Al fields must be initilized.
+         * @brief SetDetectorCapability Set the Detector capabilities. Al fields must be initialized.
          * @param cap pointer to DetectorCapability struct.
          */
         void SetDetectorCapability(uint32_t cap);

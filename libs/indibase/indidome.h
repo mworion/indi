@@ -3,7 +3,7 @@
  Copyright(c) 2014 Jasem Mutlaq. All rights reserved.
 
  The code used calculate dome target AZ and ZD is written by Ferran Casarramona, and adapted from code from Markus Wildi.
- The transformations are based on the paper Matrix Method for Coodinates Transformation written by Toshimi Taki (http://www.asahi-net.or.jp/~zs3t-tk).
+ The transformations are based on the paper Matrix Method for Coordinates Transformation written by Toshimi Taki (http://www.asahi-net.or.jp/~zs3t-tk).
 
  This library is free software; you can redistribute it and/or
  modify it under the terms of the GNU Library General Public
@@ -63,7 +63,7 @@ class TCP;
 
    Developers need to subclass INDI::Dome to implement any driver for Domes within INDI.
 
-  \note The code used calculate dome target AZ and ZD is written by Ferran Casarramona, and adapted from code from Markus Wildi. The transformations are based on the paper Matrix Method for Coodinates
+  \note The code used calculate dome target AZ and ZD is written by Ferran Casarramona, and adapted from code from Markus Wildi. The transformations are based on the paper Matrix Method for Coordinates
  Transformation written by Toshimi Taki (http://www.asahi-net.or.jp/~zs3t-tk).
 
 \author Jasem Mutlaq
@@ -155,9 +155,9 @@ class Dome : public DefaultDevice
         {
             DOME_CAN_ABORT          = 1 << 0, /*!< Can the dome motion be aborted? */
             DOME_CAN_ABS_MOVE       = 1 << 1, /*!< Can the dome move to an absolute azimuth position? */
-            DOME_CAN_REL_MOVE       = 1 << 2, /*!< Can the dome move to a relative position a number of degrees away from current position? Positive degress is Clockwise direction. Negative Degrees is counter clock wise direction */
+            DOME_CAN_REL_MOVE       = 1 << 2, /*!< Can the dome move to a relative position a number of degrees away from current position? Positive degrees is Clockwise direction. Negative Degrees is counter clock wise direction */
             DOME_CAN_PARK           = 1 << 3, /*!< Can the dome park and unpark itself? */
-            DOME_CAN_SYNC           = 1 << 4, /*!< Can the dome sync to arbitrary postion? */
+            DOME_CAN_SYNC           = 1 << 4, /*!< Can the dome sync to arbitrary position? */
             DOME_HAS_SHUTTER        = 1 << 5, /*!< Does the dome has a shutter than can be opened and closed electronically? */
             DOME_HAS_VARIABLE_SPEED = 1 << 6, /*!< Can the dome move in different configurable speeds? */
             DOME_HAS_BACKLASH       = 1 << 7  /*!< Can the dome compensate for backlash? */
@@ -221,7 +221,7 @@ class Dome : public DefaultDevice
         }
 
         /**
-             * @return True if dome has absolute postion encoders.
+             * @return True if dome has absolute position encoders.
              */
         bool CanAbsMove()
         {
@@ -338,6 +338,9 @@ class Dome : public DefaultDevice
 
         /**
              * \brief Goto Park Position. The park position is an absolute azimuth value.
+             * \note The shutter park policy (DOME_SHUTTER_PARK_POLICY) is applied by INDI::Dome before this
+             * function is called: if "Close On Park" is enabled, the shutter close command is already issued.
+             * Do not close the shutter here unless SetShutterParkPolicyHandledByDriver(true) was called.
              * \return Return IPS_OK if motion is completed and Dome reached park position. Return IPS_BUSY if Dome started motion to park requested position and is in progress.
                         Return -IPS_ALERT if there is an error.
              */
@@ -346,6 +349,9 @@ class Dome : public DefaultDevice
         /**
              * \brief UnPark dome. The action of the Unpark command is dome specific, but it may include opening the shutter and moving to home position. When UnPark() is successful
              * The observatory should be in a ready state to utilize the mount to perform observations.
+             * \note The shutter park policy (DOME_SHUTTER_PARK_POLICY) is applied by INDI::Dome after this
+             * function returns successfully: if "Open On UnPark" is enabled, the shutter open command is issued then.
+             * Do not open the shutter here unless SetShutterParkPolicyHandledByDriver(true) was called.
              * \return Return IPS_OK if motion is completed and Dome is unparked. Return IPS_BUSY if Dome unparking is in progress.
                         Return -IPS_ALERT if there is an error.
              */
@@ -370,8 +376,24 @@ class Dome : public DefaultDevice
              * \param operation Either open or close the shutter.
              * \return Return IPS_OK if shutter operation is complete. Return IPS_BUSY if shutter operation is in progress.
                         Return IPS_ALERT if there is an error.
+             * \note When IPS_BUSY is returned, report completion either by calling setShutterState()
+             * (SHUTTER_OPENED, SHUTTER_CLOSED or SHUTTER_ERROR), or by setting DomeShutterSP to IPS_OK with the
+             * matching switch on. INDI::Dome relies on this to complete a park or unpark that operates the shutter.
              */
         virtual IPState ControlShutter(ShutterOperation operation);
+
+        /**
+             * @brief SetShutterParkPolicyHandledByDriver By default, INDI::Dome applies the shutter park policy
+             * (DOME_SHUTTER_PARK_POLICY): it closes the shutter when parking and opens it when unparking, and keeps
+             * the park property busy until both the dome motion and the shutter operation are complete. Drivers whose
+             * hardware needs a specific sequence (e.g. rotate to park position before closing the shutter) can
+             * call this with true and implement the policy themselves in Park() and UnPark().
+             * @param enabled True if the driver applies the shutter park policy itself.
+             */
+        void SetShutterParkPolicyHandledByDriver(bool enabled)
+        {
+            m_ShutterParkPolicyHandledByDriver = enabled;
+        }
 
         /**
              * @brief getShutterStatusString
@@ -420,13 +442,13 @@ class Dome : public DefaultDevice
 
         /**
              * @brief SetRAPark Set current AZ parking position. The data park file (stored in ~/.indi/ParkData.xml) is updated in the process.
-             * @param value current Axis 1 value (AZ either in angles or encoder values as specificed by the DomeParkData type).
+             * @param value current Axis 1 value (AZ either in angles or encoder values as specified by the DomeParkData type).
              */
         void SetAxis1Park(double value);
 
         /**
              * @brief SetAxis1Park Set default AZ parking position.
-             * @param value Default Axis 1 value (AZ either in angles or encoder values as specificed by the DomeParkData type).
+             * @param value Default Axis 1 value (AZ either in angles or encoder values as specified by the DomeParkData type).
              */
         void SetAxis1ParkDefault(double steps);
 
@@ -521,73 +543,61 @@ class Dome : public DefaultDevice
         /** \brief perform handshake with device to check communication */
         virtual bool Handshake();
 
+        /**
+         * Signal to concrete driver when Active Devices are updated.
+         */
+        virtual void ActiveDevicesUpdated() {};
+
         double Csc(double x);
         double Sec(double x);
 
-        INumberVectorProperty DomeSpeedNP;
-        INumber DomeSpeedN[1];
+        INDI::PropertyNumber DomeSpeedNP {1};
 
-        ISwitchVectorProperty DomeMotionSP;
-        ISwitch DomeMotionS[2];
+        INDI::PropertySwitch DomeMotionSP {2};
 
-        INumberVectorProperty DomeAbsPosNP;
-        INumber DomeAbsPosN[1];
+        INDI::PropertyNumber DomeAbsPosNP {1};
 
-        INumberVectorProperty DomeRelPosNP;
-        INumber DomeRelPosN[1];
+        INDI::PropertyNumber DomeRelPosNP {1};
 
-        ISwitchVectorProperty AbortSP;
-        ISwitch AbortS[1];
+        INDI::PropertySwitch AbortSP {1};
 
-        INumberVectorProperty DomeParamNP;
-        INumber DomeParamN[1];
+        INDI::PropertyNumber DomeParamNP {1};
 
-        INumberVectorProperty DomeSyncNP;
-        INumber DomeSyncN[1];
+        INDI::PropertyNumber DomeSyncNP {1};
 
-        ISwitchVectorProperty DomeShutterSP;
-        ISwitch DomeShutterS[2];
+        INDI::PropertySwitch DomeShutterSP {2};
 
-        ISwitchVectorProperty ParkSP;
-        ISwitch ParkS[2];
+        INDI::PropertySwitch ParkSP {2};
 
-        INumber ParkPositionN[1];
-        INumberVectorProperty ParkPositionNP;
+        INDI::PropertyNumber ParkPositionNP {1};
 
-        ISwitch ParkOptionS[3];
-        ISwitchVectorProperty ParkOptionSP;
+        INDI::PropertySwitch ParkOptionSP {3};
 
-        //        ISwitch AutoParkS[2];
-        //        ISwitchVectorProperty AutoParkSP;
-
-        uint32_t capability;
-        DomeParkData parkDataType;
-
-        ITextVectorProperty ActiveDeviceTP;
-        IText ActiveDeviceT[1] {};
+        INDI::PropertyText ActiveDeviceTP {3};
+        enum
+        {
+            ACTIVE_MOUNT,
+            ACTIVE_INPUT,
+            ACTIVE_OUTPUT
+        };
 
         // Switch to lock id mount is unparked
-        ISwitchVectorProperty MountPolicySP;
-        ISwitch MountPolicyS[2];
+        INDI::PropertySwitch MountPolicySP {2};
 
         // Shutter control on Park/Unpark
-        ISwitchVectorProperty ShutterParkPolicySP;
-        ISwitch ShutterParkPolicyS[2];
+        INDI::PropertySwitch ShutterParkPolicySP {2};
         enum
         {
             SHUTTER_CLOSE_ON_PARK,
             SHUTTER_OPEN_ON_UNPARK,
         };
 
-        INumber PresetN[3];
-        INumberVectorProperty PresetNP;
-        ISwitch PresetGotoS[3];
-        ISwitchVectorProperty PresetGotoSP;
-        INumber DomeMeasurementsN[6];
-        INumberVectorProperty DomeMeasurementsNP;
+        INDI::PropertyNumber PresetNP {3};
+        INDI::PropertySwitch PresetGotoSP {3};
 
-        ISwitchVectorProperty OTASideSP;
-        ISwitch OTASideS[5];
+        INDI::PropertyNumber DomeMeasurementsNP {6};
+
+        INDI::PropertySwitch OTASideSP {5};
         // 0 is East, 1 is West, 2 is as reported by mout, 3 as deducted by Hour Angle
         // 4 ignore pier side and perform as in a fork mount
         enum
@@ -600,16 +610,16 @@ class Dome : public DefaultDevice
         };
 
         int mountOTASide = 0; // Side of the telescope with respect of the mount, 1: west, -1: east, 0 not reported
-        ISwitchVectorProperty DomeAutoSyncSP;
-        ISwitch DomeAutoSyncS[2];
+        INDI::PropertySwitch DomeAutoSyncSP {2};
 
-        // Backlash toogle
-        ISwitchVectorProperty DomeBacklashSP;
-        ISwitch DomeBacklashS[2];
+        // Backlash toggle
+        INDI::PropertySwitch DomeBacklashSP {2};
 
         // Backlash steps
-        INumberVectorProperty DomeBacklashNP;
-        INumber DomeBacklashN[1];
+        INDI::PropertyNumber DomeBacklashNP {1};
+
+        uint32_t capability;
+        DomeParkData parkDataType;
 
         double prev_az, prev_alt, prev_ra, prev_dec;
 
@@ -659,7 +669,7 @@ class Dome : public DefaultDevice
         Controller * controller = nullptr;
 
         bool IsParked = false;
-        bool IsMountParked = false;
+        bool IsMountParked = true;
         bool IsLocked = true;
         bool AutoSyncWarning = false;
         bool UseHourAngle = false;
@@ -675,6 +685,38 @@ class Dome : public DefaultDevice
 
         bool callHandshake();
         uint8_t domeConnection = CONNECTION_SERIAL | CONNECTION_TCP;
+
+        /////////////////////////////////////////////////////////////////////////////
+        // Shutter park policy.
+        // A park (or unpark) that operates the shutter completes only when both
+        // the dome motion and the shutter operation are complete.
+        /////////////////////////////////////////////////////////////////////////////
+        enum ShutterParkSequence
+        {
+            SHUTTER_SEQUENCE_NONE,
+            SHUTTER_SEQUENCE_PARK,
+            SHUTTER_SEQUENCE_UNPARK
+        };
+
+        /** @return True if DomeShutterSP reports the shutter fully open or closed as given by operation. */
+        bool isShutterAt(ShutterOperation operation) const;
+        /** @return True if both DomeShutterSP and the driver-reported shutter state say the shutter is at operation. */
+        bool isShutterKnownAt(ShutterOperation operation) const;
+        /** @brief Called when the driver reports that the park/unpark motion of the sequence is complete. */
+        void shutterParkMotionDone();
+        /** @brief Evaluate the sequence and finish the park/unpark once motion and shutter are both done. */
+        void checkShutterParkSequence();
+        /** @brief Drop any active sequence without changing the park state. */
+        void cancelShutterParkSequence();
+
+        bool m_ShutterParkPolicyHandledByDriver {false};
+        ShutterParkSequence m_ShutterParkSequence {SHUTTER_SEQUENCE_NONE};
+        bool m_ShutterParkCommandSent {false};
+        bool m_ShutterParkMotionDone {false};
+        bool m_ShutterParkShutterDone {false};
+        bool m_ShutterParkShutterFailed {false};
+        INDI::Timer m_ShutterParkTimer;
+        static constexpr uint32_t SHUTTER_PARK_POLL_INTERVAL { 1000 };
 
         // How often we update horizontal coordinates (10 seconds).
         static constexpr uint32_t HORZ_UPDATE_TIMER { 10000 };

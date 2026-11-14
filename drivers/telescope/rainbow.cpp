@@ -31,9 +31,9 @@
 
 static std::unique_ptr<Rainbow> scope(new Rainbow());
 
-Rainbow::Rainbow() : INDI::Telescope ()
+Rainbow::Rainbow() : INDI::Telescope (), GI(this)
 {
-    setVersion(1, 2);
+    setVersion(1, 3);
 
     SetTelescopeCapability(TELESCOPE_CAN_GOTO |
                            TELESCOPE_CAN_SYNC |
@@ -42,8 +42,11 @@ Rainbow::Rainbow() : INDI::Telescope ()
                            TELESCOPE_CAN_CONTROL_TRACK |
                            TELESCOPE_HAS_TIME |
                            TELESCOPE_HAS_LOCATION |
+                           TELESCOPE_HAS_PIER_SIDE |
                            TELESCOPE_HAS_TRACK_MODE |
-                           TELESCOPE_HAS_PIER_SIDE_SIMULATION, 4);
+                           TELESCOPE_CAN_HOME_GO,
+                           4
+                          );
 }
 
 /////////////////////////////////////////////////////////////////////////////////////
@@ -66,9 +69,9 @@ bool Rainbow::initProperties()
     SetParkDataType(PARK_AZ_ALT);
 
     // Homing
-    IUFillSwitch(&HomeS[0], "HOME", "Go Home", ISS_OFF);
-    IUFillSwitchVector(&HomeSP, HomeS, 1, getDeviceName(), "HOME", "Homing", MAIN_CONTROL_TAB, IP_RW, ISR_ATMOST1, 60,
-                       IPS_IDLE);
+    // IUFillSwitch(&HomeS[0], "GO", "Go", ISS_OFF);
+    // IUFillSwitchVector(&HomeSP, HomeS, 1, getDeviceName(), "TELESCOPE_HOME", "Home", MAIN_CONTROL_TAB, IP_RW, ISR_ATMOST1, 60,
+    //                    IPS_IDLE);
 
     // Star Alignment on Sync
     IUFillSwitch(&SaveAlignBeforeSyncS[STAR_ALIGNMENT_ENABLED], "STAR_ALIGNMENT_ENABLED", "Enabled", ISS_OFF);
@@ -127,7 +130,7 @@ bool Rainbow::initProperties()
 
     setDriverInterface(getDriverInterface() | GUIDER_INTERFACE);
 
-    initGuiderProperties(getDeviceName(), MOTION_TAB);
+    GI::initProperties(MOTION_TAB);
 
     addDebugControl();
 
@@ -144,10 +147,8 @@ bool Rainbow::updateProperties()
     if (isConnected())
     {
         defineProperty(&HorizontalCoordsNP);
-        defineProperty(&HomeSP);
+        //defineProperty(&HomeSP);
 
-        defineProperty(&GuideNSNP);
-        defineProperty(&GuideWENP);
         defineProperty(&GuideRateNP);
         defineProperty(&SlewSpeedsNP);
 
@@ -162,10 +163,8 @@ bool Rainbow::updateProperties()
     else
     {
         deleteProperty(HorizontalCoordsNP.name);
-        deleteProperty(HomeSP.name);
+        //deleteProperty(HomeSP.name);
 
-        deleteProperty(GuideNSNP.name);
-        deleteProperty(GuideWENP.name);
         deleteProperty(GuideRateNP.name);
         deleteProperty(SlewSpeedsNP.name);
 
@@ -176,6 +175,8 @@ bool Rainbow::updateProperties()
         deleteProperty(RSTMotorPowNP.name);
     }
 
+    GI::updateProperties();
+
     return true;
 }
 
@@ -184,6 +185,10 @@ bool Rainbow::updateProperties()
 /////////////////////////////////////////////////////////////////////////////////////
 bool Rainbow::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
 {
+    // Check guider interface
+    if (GI::processNumber(dev, name, values, names, n))
+        return true;
+
     if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
     {
         // Horizontal Coordinates
@@ -264,8 +269,6 @@ bool Rainbow::ISNewNumber(const char *dev, const char *name, double values[], ch
             IDSetNumber(&SlewSpeedsNP, nullptr);
             return true;
         }
-        else
-            processGuiderProperties(name, values, names, n);
     }
 
 
@@ -280,29 +283,8 @@ bool Rainbow::ISNewSwitch(const char *dev, const char *name, ISState *states, ch
     if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
     {
         // Homing
-        if (!strcmp(HomeSP.name, name))
-        {
-            if (HomeSP.s == IPS_BUSY)
-            {
-                LOG_WARN("Homing is already in progress.");
-                return true;
-            }
-
-            HomeSP.s = findHome() ? IPS_BUSY : IPS_ALERT;
-            if (HomeSP.s == IPS_BUSY)
-            {
-                TrackState = SCOPE_SLEWING;
-                HomeS[0].s = ISS_ON;
-                LOG_INFO("Mount is moving to home position...");
-            }
-            else
-                LOG_ERROR("Mount failed to move to home position.");
-
-            IDSetSwitch(&HomeSP, nullptr);
-            return true;
-        }
         // Star Align
-        else if (!strcmp(SaveAlignBeforeSyncSP.name, name))
+        if (!strcmp(SaveAlignBeforeSyncSP.name, name))
         {
 
             IUUpdateSwitch(&SaveAlignBeforeSyncSP, states, names, n);
@@ -353,7 +335,7 @@ void Rainbow::getStartupStatus()
     LOGF_INFO("Detected firmware %s", m_Version.c_str());
 
     if (getTrackingState())
-        IDSetSwitch(&TrackStateSP, nullptr);
+        TrackStateSP.apply();
     if (getGuideRate())
         IDSetNumber(&GuideRateNP, nullptr);
     if (getSlewSpeedVal(SLEW_SPEED_MAX) && (getSlewSpeedVal(SLEW_SPEED_FIND) && getSlewSpeedVal(SLEW_SPEED_CENTERING)))
@@ -437,7 +419,6 @@ bool Rainbow::Handshake()
 bool Rainbow::getFirmwareVersion()
 {
     char res[DRIVER_LEN] = {0};
-    char fw[6], sn[6];
 
     if (sendCommand(":AV#", res) == false)
         return false;
@@ -448,6 +429,7 @@ bool Rainbow::getFirmwareVersion()
     // Write Firmware and Serial Number to INDI Control Panel
     if (isConnected()) // executed onlyafter properties are updated
     {
+        char fw[16] = {0}, sn[16] = {0};
         sscanf(res + 3, "%6s", fw);
         memset(res, 0, sizeof res);
         IUSaveText(&RSTVersionsT[FIRMWARE], fw);
@@ -483,9 +465,9 @@ bool Rainbow::getTrackingState()
     if (sendCommand(":AT#", res) == false)
         return false;
 
-    TrackStateS[TRACK_ON].s = (res[3] == '1') ? ISS_ON : ISS_OFF;
-    TrackStateS[TRACK_OFF].s = (res[3] == '0') ? ISS_ON : ISS_OFF;
-    TrackStateSP.s = (TrackStateS[TRACK_ON].s == ISS_ON) ? IPS_BUSY : IPS_IDLE;
+    TrackStateSP[TRACK_ON].setState((res[3] == '1') ? ISS_ON : ISS_OFF);
+    TrackStateSP[TRACK_OFF].setState((res[3] == '0') ? ISS_ON : ISS_OFF);
+    TrackStateSP.setState((TrackStateSP[TRACK_ON].getState() == ISS_ON) ? IPS_BUSY : IPS_IDLE);
 
     return true;
 }
@@ -495,7 +477,11 @@ bool Rainbow::getTrackingState()
 /////////////////////////////////////////////////////////////////////////////////////
 bool Rainbow::findHome()
 {
-    return sendCommand(":Ch#");
+    bool ret = false;
+    ret = sendCommand(":Ch#");
+    if (ret)
+        TrackState = SCOPE_SLEWING;
+    return ret;
 }
 
 /////////////////////////////////////////////////////////////////////////////////////
@@ -608,10 +594,10 @@ bool Rainbow::UnPark()
 {
     if (SetTrackEnabled(true))
     {
-        TrackStateS[TRACK_ON].s = ISS_ON;
-        TrackStateS[TRACK_OFF].s = ISS_OFF;
-        TrackStateSP.s = IPS_BUSY;
-        IDSetSwitch(&TrackStateSP, nullptr);
+        TrackStateSP[TRACK_ON].setState(ISS_ON);
+        TrackStateSP[TRACK_OFF].setState(ISS_OFF);
+        TrackStateSP.setState(IPS_BUSY);
+        TrackStateSP.apply();
 
         SetParked(false);
         return true;
@@ -677,12 +663,12 @@ bool Rainbow::ReadScopeStatus()
             HorizontalCoordsNP.s = IPS_OK;
             IDSetNumber(&HorizontalCoordsNP, nullptr);
 
-            if (HomeSP.s == IPS_BUSY)
+            if (HomeSP.getState() == IPS_BUSY)
             {
                 LOG_INFO("Homing completed successfully.");
-                HomeSP.s = IPS_OK;
-                HomeS[0].s = ISS_OFF;
-                IDSetSwitch(&HomeSP, nullptr);
+                HomeSP.reset();
+                HomeSP.setState(IPS_OK);
+                HomeSP.apply();
                 TrackState = SCOPE_IDLE;
             }
             else
@@ -699,14 +685,14 @@ bool Rainbow::ReadScopeStatus()
             HorizontalCoordsNP.s = IPS_ALERT;
             IDSetNumber(&HorizontalCoordsNP, nullptr);
 
-            EqNP.s = IPS_ALERT;
+            EqNP.setState(IPS_ALERT);
 
-            if (HomeSP.s == IPS_BUSY)
+            if (HomeSP.getState() == IPS_BUSY)
             {
                 TrackState = SCOPE_IDLE;
-                HomeSP.s = IPS_ALERT;
-                HomeS[0].s = ISS_OFF;
-                IDSetSwitch(&HomeSP, nullptr);
+                HomeSP.reset();
+                HomeSP.setState(IPS_ALERT);
+                HomeSP.apply();
                 LOGF_ERROR("Homing error: %s", getSlewErrorString(m_SlewErrorCode).c_str());
             }
             else
@@ -728,7 +714,7 @@ bool Rainbow::ReadScopeStatus()
         else if (m_SlewErrorCode > 0)
         {
             HorizontalCoordsNP.s = IPS_ALERT;
-            EqNP.s = IPS_ALERT;
+            EqNP.setState(IPS_ALERT);
             // JM TODO CHECK: Does the mount RESUME tracking after slew failure or it completely stops idle?
             TrackState = m_GotoType == Horizontal ? SCOPE_IDLE : SCOPE_TRACKING;
             LOGF_ERROR("Parking error: %s", getSlewErrorString(m_SlewErrorCode).c_str());
@@ -739,8 +725,9 @@ bool Rainbow::ReadScopeStatus()
     // Equatorial Coords
     if (!getRA() || !getDE())
     {
-        EqNP.s = IPS_ALERT;
-        IDSetNumber(&EqNP, "Error reading RA/DEC.");
+        EqNP.setState(IPS_ALERT);
+        LOG_ERROR("Error reading RA/DEC.");
+        EqNP.apply();
         return false;
     }
 
@@ -755,6 +742,8 @@ bool Rainbow::ReadScopeStatus()
         HorizontalCoordsN[AXIS_ALT].value = m_CurrentAL;
     }
     IDSetNumber(&HorizontalCoordsNP, nullptr);
+
+    setPierSide(getSideOfPier());
 
     NewRaDec(m_CurrentRA, m_CurrentDE);
 
@@ -804,29 +793,31 @@ bool Rainbow::Goto(double ra, double dec)
     fs_sexa(DecStr, dec, 2, 36000);
 
     // If moving, let's stop it first.
-    if (EqNP.s == IPS_BUSY)
+    if (EqNP.getState() == IPS_BUSY)
     {
         if (!isSimulation() && Abort() == false)
         {
-            AbortSP.s = IPS_ALERT;
-            IDSetSwitch(&AbortSP, "Abort slew failed.");
+            AbortSP.setState(IPS_ALERT);
+            LOG_ERROR("Abort slew failed.");
+            AbortSP.apply();
             return false;
         }
 
-        AbortSP.s = IPS_OK;
-        EqNP.s    = IPS_IDLE;
-        IDSetSwitch(&AbortSP, "Slew aborted.");
-        IDSetNumber(&EqNP, nullptr);
+        AbortSP.setState(IPS_OK);
+        EqNP.setState(IPS_IDLE);
+        LOG_ERROR("Slew aborted.");
+        AbortSP.apply();
+        EqNP.apply();
 
-        if (MovementNSSP.s == IPS_BUSY || MovementWESP.s == IPS_BUSY)
+        if (MovementNSSP.getState() == IPS_BUSY || MovementWESP.getState() == IPS_BUSY)
         {
-            MovementNSSP.s = IPS_IDLE;
-            MovementWESP.s = IPS_IDLE;
-            EqNP.s = IPS_IDLE;
-            IUResetSwitch(&MovementNSSP);
-            IUResetSwitch(&MovementWESP);
-            IDSetSwitch(&MovementNSSP, nullptr);
-            IDSetSwitch(&MovementWESP, nullptr);
+            MovementNSSP.setState(IPS_IDLE);
+            MovementWESP.setState(IPS_IDLE);
+            EqNP.setState(IPS_IDLE);
+            MovementNSSP.reset();
+            MovementWESP.reset();
+            MovementNSSP.apply();
+            MovementWESP.apply();
         }
 
         // sleep for 100 mseconds
@@ -1083,11 +1074,14 @@ bool Rainbow::MoveWE(INDI_DIR_WE dir, TelescopeMotionCommand command)
 /////////////////////////////////////////////////////////////////////////////
 bool Rainbow::Abort()
 {
-    if (GuideNSNP.s == IPS_BUSY || GuideWENP.s == IPS_BUSY)
+    if (GuideNSNP.getState() == IPS_BUSY || GuideWENP.getState() == IPS_BUSY)
     {
-        GuideNSNP.s = GuideWENP.s = IPS_IDLE;
-        GuideNSN[0].value = GuideNSN[1].value = 0.0;
-        GuideWEN[0].value = GuideWEN[1].value = 0.0;
+        GuideNSNP.setState(IPS_IDLE);
+        GuideWENP.setState(IPS_IDLE);
+        GuideNSNP[0].setValue(0);
+        GuideNSNP[1].setValue(0);
+        GuideWENP[0].setValue(0);
+        GuideWENP[1].setValue(0);
 
         if (m_GuideNSTID)
         {
@@ -1102,8 +1096,8 @@ bool Rainbow::Abort()
         }
 
         LOG_INFO("Guide aborted.");
-        IDSetNumber(&GuideNSNP, nullptr);
-        IDSetNumber(&GuideWENP, nullptr);
+        GuideNSNP.apply();
+        GuideWENP.apply();
 
         return true;
     }
@@ -1241,47 +1235,46 @@ IPState Rainbow::guide(Direction direction, uint32_t ms)
     // set up direction properties
     char dc = 'x';
     char cmd[DRIVER_LEN] = {0};
-    ISwitchVectorProperty *moveSP = &MovementNSSP;
-    ISwitch moveS = MovementNSS[0];
+    // ISwitchVectorProperty *moveSP = &MovementNSSP;
+    // ISwitch moveS = MovementNSSP[0];
+    // int* guideTID = &m_GuideNSTID;
     int* guideTID = &m_GuideNSTID;
+    int index = 0;
+
 
     // set up pointers to the various things needed
     switch (direction)
     {
         case North:
             dc = 'N';
-            moveSP = &MovementNSSP;
-            moveS = MovementNSS[0];
             guideTID = &m_GuideNSTID;
             break;
         case South:
             dc = 'S';
-            moveSP = &MovementNSSP;
-            moveS = MovementNSS[1];
             guideTID = &m_GuideNSTID;
+            index = 1;
             break;
         case East:
             dc = 'E';
-            moveSP = &MovementWESP;
-            moveS = MovementWES[1];
             guideTID = &m_GuideWETID;
             break;
         case West:
             dc = 'W';
-            moveSP = &MovementWESP;
-            moveS = MovementWES[0];
             guideTID = &m_GuideWETID;
+            index = 1;
             break;
     }
 
-    if (MovementNSSP.s == IPS_BUSY || MovementWESP.s == IPS_BUSY)
+    if (MovementNSSP.getState() == IPS_BUSY || MovementWESP.getState() == IPS_BUSY)
     {
         LOG_ERROR("Cannot guide while moving.");
         return IPS_ALERT;
     }
 
+    auto directionProperty = direction > North ? MovementWESP : MovementNSSP;
+
     // If already moving (no pulse command), then stop movement
-    if (moveSP->s == IPS_BUSY)
+    if (directionProperty.getState() == IPS_BUSY)
     {
         LOG_DEBUG("Already moving - stop");
         sendCommand(":Q#");
@@ -1295,26 +1288,26 @@ IPState Rainbow::guide(Direction direction, uint32_t ms)
     }
 
     // Make sure TRACKING is set to Guide
-    if (IUFindOnSwitchIndex(&TrackModeSP) != TRACK_CUSTOM)
+    if (TrackModeSP.findOnSwitchIndex() != TRACK_CUSTOM)
     {
         SetTrackMode(TRACK_CUSTOM);
-        IUResetSwitch(&TrackModeSP);
-        TrackModeS[TRACK_CUSTOM].s = ISS_ON;
-        IDSetSwitch(&TrackModeSP, nullptr);
+        TrackModeSP.reset();
+        TrackModeSP[TRACK_CUSTOM].setState(ISS_ON);
+        TrackModeSP.apply();
         LOG_INFO("Tracking mode switched to guide.");
     }
 
     // Make sure SLEWING SPEED is set to Guide
-    if (IUFindOnSwitchIndex(&SlewRateSP) != SLEW_GUIDE)
+    if (SlewRateSP.findOnSwitchIndex() != SLEW_GUIDE)
     {
         // Set slew to guiding
         SetSlewRate(SLEW_GUIDE);
-        IUResetSwitch(&SlewRateSP);
-        SlewRateS[SLEW_GUIDE].s = ISS_ON;
-        IDSetSwitch(&SlewRateSP, nullptr);
+        SlewRateSP.reset();
+        SlewRateSP[SLEW_GUIDE].setState(ISS_ON);
+        SlewRateSP.apply();
     }
 
-    moveS.s = ISS_ON;
+    directionProperty[index].setState(ISS_ON);
     snprintf(cmd, DRIVER_LEN, ":M%c#", std::tolower(dc));
 
     // start movement at HC button rate 1
@@ -1371,24 +1364,24 @@ void Rainbow::guideTimeout(Direction direction)
     {
         case North:
         case South:
-            IUResetSwitch(&MovementNSSP);
-            IDSetSwitch(&MovementNSSP, nullptr);
-            GuideNSNP.np[0].value = 0;
-            GuideNSNP.np[1].value = 0;
-            GuideNSNP.s           = IPS_IDLE;
+            MovementNSSP.reset();
+            MovementNSSP.apply();
+            GuideNSNP[0].setValue(0);
+            GuideNSNP[1].setValue(0);
+            GuideNSNP.setState(IPS_IDLE);
             m_GuideNSTID            = 0;
-            IDSetNumber(&GuideNSNP, nullptr);
+            GuideNSNP.apply();
             snprintf(cmd, DRIVER_LEN, ":Q%c#", direction == North ? 'n' : 's');
             break;
         case East:
         case West:
-            IUResetSwitch(&MovementWESP);
-            IDSetSwitch(&MovementWESP, nullptr);
-            GuideWENP.np[0].value = 0;
-            GuideWENP.np[1].value = 0;
-            GuideWENP.s           = IPS_IDLE;
+            MovementWESP.reset();
+            MovementWESP.apply();
+            GuideWENP[0].setValue(0);
+            GuideWENP[1].setValue(0);
+            GuideWENP.setState(IPS_IDLE);
             m_GuideWETID            = 0;
-            IDSetNumber(&GuideWENP, nullptr);
+            GuideWENP.apply();
             snprintf(cmd, DRIVER_LEN, ":Q%c#", direction == East ? 'e' : 'w');
             break;
     }
@@ -1531,7 +1524,7 @@ bool Rainbow::sendScopeTime()
     {
         char utcStr[8] = {0};
         snprintf(utcStr, 8, "%.2f", offset);
-        IUSaveText(&TimeT[1], utcStr);
+        TimeTP[OFFSET].setText(utcStr);
     }
     else
     {
@@ -1574,14 +1567,14 @@ bool Rainbow::sendScopeTime()
 
     // Format it into the final UTC ISO 8601
     strftime(cdate, MAXINDINAME, "%Y-%m-%dT%H:%M:%S", &utm);
-    IUSaveText(&TimeT[0], cdate);
+    TimeTP[UTC].setText(cdate);
 
-    LOGF_DEBUG("Mount controller UTC Time: %s", TimeT[0].text);
-    LOGF_DEBUG("Mount controller UTC Offset: %s", TimeT[1].text);
+    LOGF_DEBUG("Mount controller UTC Time: %s", TimeTP[UTC].getText());
+    LOGF_DEBUG("Mount controller UTC Offset: %s", TimeTP[OFFSET].getText());
 
     // Let's send everything to the client
-    TimeTP.s = IPS_OK;
-    IDSetText(&TimeTP, nullptr);
+    TimeTP.setState(IPS_OK);
+    TimeTP.apply();
 
     return true;
 }
@@ -1597,11 +1590,11 @@ bool Rainbow::sendScopeLocation()
 
     if (isSimulation())
     {
-        LocationNP.np[LOCATION_LATITUDE].value = 29.5;
-        LocationNP.np[LOCATION_LONGITUDE].value = 48.0;
-        LocationNP.np[LOCATION_ELEVATION].value = 10;
-        LocationNP.s           = IPS_OK;
-        IDSetNumber(&LocationNP, nullptr);
+        LocationNP[LOCATION_LATITUDE].setValue(29.5);
+        LocationNP[LOCATION_LONGITUDE].setValue(48.0);
+        LocationNP[LOCATION_ELEVATION].setValue(10);
+        LocationNP.setState(IPS_OK);
+        LocationNP.apply();
         return true;
     }
 
@@ -1642,18 +1635,48 @@ bool Rainbow::sendScopeLocation()
 
     // Only update if different from current values
     // and then immediately save to config.
-    if (std::abs(LocationN[LOCATION_LONGITUDE].value - longitude) > 0.001 ||
-            std::abs(LocationN[LOCATION_LATITUDE].value - latitude) > 0.001)
+    if (std::abs(LocationNP[LOCATION_LONGITUDE].getValue() - longitude) > 0.001 ||
+            std::abs(LocationNP[LOCATION_LATITUDE].getValue() - latitude) > 0.001)
     {
-        LocationN[LOCATION_LATITUDE].value = latitude;
-        LocationN[LOCATION_LONGITUDE].value = longitude;
-        LOGF_DEBUG("Mount Controller Latitude: %.3f Longitude: %.3f", LocationN[LOCATION_LATITUDE].value,
-                   LocationN[LOCATION_LONGITUDE].value);
-        IDSetNumber(&LocationNP, nullptr);
-        saveConfig(true, LocationNP.name);
+        LocationNP[LOCATION_LATITUDE].setValue(latitude);
+        LocationNP[LOCATION_LONGITUDE].setValue(longitude);
+        LOGF_DEBUG("Mount Controller Latitude: %.3f Longitude: %.3f", LocationNP[LOCATION_LATITUDE].getValue(),
+                   LocationNP[LOCATION_LONGITUDE].getValue());
+        LocationNP.apply();
+        saveConfig(true, LocationNP.getName());
     }
 
     return true;
+}
+
+/////////////////////////////////////////////////////////////////////////////
+/// Send Command
+/////////////////////////////////////////////////////////////////////////////
+Rainbow::TelescopePierSide Rainbow::getSideOfPier()
+{
+    float decAxisAlignmentOffset {0}, decAxis {0};
+    char cyResponse[DRIVER_LEN] = {0}, cg3Response[DRIVER_LEN] = {0};
+
+    if (!sendCommand(":CG3#", cg3Response))
+        return PIER_UNKNOWN;
+
+    sscanf(cg3Response + 4, "%f", &decAxisAlignmentOffset);
+
+    if (!sendCommand(":CY#", cyResponse))
+        return PIER_UNKNOWN;
+
+    char rotationAngle[16] = {0};
+
+    snprintf(rotationAngle, sizeof(rotationAngle), "%.7s", cyResponse + 3);
+
+    sscanf(rotationAngle, "%f", &decAxis);
+
+    auto offset = decAxis - decAxisAlignmentOffset;
+
+    if (offset > 90)
+        return PIER_WEST;
+    else
+        return PIER_EAST;
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -1746,4 +1769,21 @@ std::vector<std::string> Rainbow::split(const std::string &input, const std::str
     first{input.begin(), input.end(), re, -1},
           last;
     return {first, last};
+}
+
+/////////////////////////////////////////////////////////////////////////////
+///
+/////////////////////////////////////////////////////////////////////////////
+// Home
+IPState Rainbow::ExecuteHomeAction(TelescopeHomeAction action)
+{
+
+    switch (action)
+    {
+        case HOME_GO:
+            return findHome() ? IPS_BUSY : IPS_ALERT;
+
+        default:
+            return IPS_ALERT;
+    }
 }

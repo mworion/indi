@@ -1,0 +1,323 @@
+/*******************************************************************************
+  MLAstro Robotic Polar Alignment (RPA)
+
+  Copyright (C) 2026 Jasem Mutlaq (mutlaqja@ikarustech.com)
+
+  ESP32-based serial protocol (MLAstroRPA custom protocol).
+
+  This library is free software; you can redistribute it and/or
+  modify it under the terms of the GNU Lesser General Public
+  License as published by the Free Software Foundation; either
+  version 2.1 of the License, or (at your option) any later version.
+
+  This library is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+  Lesser General Public License for more details.
+
+  You should have received a copy of the GNU Lesser General Public
+  License along with this library; if not, write to the Free Software
+  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+*******************************************************************************/
+
+#pragma once
+
+#include "defaultdevice.h"
+#include "indipacinterface.h"
+#include "connectionplugins/connectionserial.h"
+
+/**
+ * @brief The MLAstroRPA class drives the MLAstro Robotic Polar Alignment controller
+ *        via its ESP32-based serial protocol.
+ *
+ * Protocol summary:
+ *   - Handshake:  [MLAstroRPA-TC]\n  →  ok\n  (older firmware) or
+ *                                        ok,firmware X.Y.Z,SN:AA:BB:CC:DD:EE:F0\n (newer)
+ *   - Telemetry:  ?\n  →  <STATUS|Mpos:X.XXXXX,Y.YYYYY|>DATA_SETTING
+ *   - Relative move (AZ): JoRe:1, ReDe:D,ReAM:M,ReAS:S, MAzL:1 or MAzR:1
+ *   - Relative move (ALT): JoRe:1, ReDe:D,ReAM:M,ReAS:S, MAlU:1 or MAlD:1
+ *   - Stop:   STOP:1\n  (smooth deceleration)
+ *   - Speed:  SLvl:X\n  (1–5)
+ *   - Home:   SetH:1\n / RetH:1\n / RstH:1\n
+ *   - Sync:   SetH:1\n  (marks current position as 0,0 reference)
+ *   - Backlash: Back:X\n, AzBl:X\n, AlBl:X\n
+ *   - Alt overshoot (2-leg P.A routine): Over:X\n, OvUp:X\n, OvDn:X\n,
+ *                                        OvD:X\n, OvM:X\n, OvS:X\n
+ *     When enabled for a given direction, a downward altitude move overshoots
+ *     the target and returns upward for the final approach so the platform
+ *     always comes to rest moving up, which settles more stably than a final
+ *     downward approach.
+ *   - Reverse:  AzRD:X\n, AlRD:X\n
+ *   - Motor config: chained commands + Save&Reboot:1\n
+ *   - Network:  STAs:X\n, STAp:X\n, APss:X\n, APpa:X\n, APip:X\n (set-only;
+ *               requires Save&Reboot to persist). Password fields are write-only
+ *               in the driver — never read back, never saved to the local config.
+ *
+ * Capabilities:
+ *   PAC_HAS_SPEED | PAC_CAN_REVERSE | PAC_HAS_POSITION |
+ *   PAC_CAN_HOME  | PAC_HAS_BACKLASH | PAC_CAN_SYNC
+ *
+ * Client-side correction shaping (Correction tab), mirroring MLAstro's N.I.N.A.
+ * plugin:
+ *   - Correction Percentage (default 75%, 1-100%) is applied to Azimuth on every
+ *     automated correction and to Altitude when the software overshoot is not
+ *     active for the current correction direction.
+ *   - Software Overshoot (ALT): when enabled for the current direction, the Alt
+ *     axis corrects 100% of the error and then travels the configured overshoot
+ *     (0-240 arcmin) past the target so the platform always settles from the
+ *     same direction.
+ */
+class MLAstroRPA : public INDI::DefaultDevice, public INDI::PACInterface
+{
+    public:
+        MLAstroRPA();
+        virtual ~MLAstroRPA() override = default;
+
+        const char *getDefaultName() override;
+
+        bool ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n) override;
+        bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
+        bool ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n) override;
+
+    protected:
+        bool initProperties() override;
+        bool updateProperties() override;
+        bool saveConfigItems(FILE *fp) override;
+
+        bool Handshake();
+        void TimerHit() override;
+
+        ///////////////////////////////////////////////////////////////////////////////
+        /// PACInterface – axis movement
+        ///////////////////////////////////////////////////////////////////////////////
+        IPState MoveAZ(double degrees) override;
+        IPState MoveALT(double degrees) override;
+        IPState MoveBoth(double azDegrees, double altDegrees) override;
+
+        /// Scale a requested azimuth step by the configured correction percentage.
+        double applyCorrectionAZ(double azDegrees) const;
+        /// Scale a requested altitude step by the correction percentage, or apply
+        /// the full error plus the configured overshoot when the driver-side
+        /// correction overshoot is active for the move direction.
+        double applyCorrectionALT(double altDegrees) const;
+
+        ///////////////////////////////////////////////////////////////////////////////
+        /// PACInterface – abort, speed and reverse
+        ///////////////////////////////////////////////////////////////////////////////
+        bool AbortMotion() override;
+        bool SetPACSpeed(uint16_t speed) override;
+        bool ReverseAZ(bool enabled) override;
+        bool ReverseALT(bool enabled) override;
+
+        ///////////////////////////////////////////////////////////////////////////////
+        /// PACInterface – home management
+        ///////////////////////////////////////////////////////////////////////////////
+        bool    SetHome() override;
+        IPState GoHome() override;
+        bool    ResetHome() override;
+
+        ///////////////////////////////////////////////////////////////////////////////
+        /// PACInterface – sync
+        ///////////////////////////////////////////////////////////////////////////////
+        bool SyncAZ(double degrees) override;
+        bool SyncALT(double degrees) override;
+
+        ///////////////////////////////////////////////////////////////////////////////
+        /// PACInterface – backlash
+        ///////////////////////////////////////////////////////////////////////////////
+        bool SetBacklashEnabled(bool enabled) override;
+        bool SetBacklashAZ(int32_t steps) override;
+        bool SetBacklashALT(int32_t steps) override;
+
+    private:
+        ///////////////////////////////////////////////////////////////////////////////
+        /// Communication
+        ///////////////////////////////////////////////////////////////////////////////
+        /**
+         * @brief sendCommand Send a string command (newline appended automatically).
+         * @param cmd  Null-terminated command string without the trailing newline.
+         * @param res  Buffer for the response; nullptr if no response is expected.
+         * @return True on success.
+         */
+        bool sendCommand(const char *cmd, char *res = nullptr);
+
+        /**
+         * @brief parsetelemetry Parse the telemetry response from '?' query.
+         * @param response Full telemetry string.
+         * @return True if successfully parsed.
+         */
+        bool parseTelemetry(const char *response);
+
+        /**
+         * @brief degreesToDMS Convert a signed decimal-degrees value to integer D, M, S and direction.
+         * @param degrees  Input signed degrees.
+         * @param d        Output whole degrees (always ≥ 0).
+         * @param m        Output arc minutes.
+         * @param s        Output arc seconds.
+         * @param positive Output true if the value is positive (East/Up).
+         */
+        static void degreesToDMS(double degrees, int &d, int &m, int &s, bool &positive);
+
+        /**
+         * @brief sendRelativeMove Send a relative angle move command for one axis.
+         * @param degrees  Signed step in degrees.
+         * @param cmdPos   Protocol command for positive direction (e.g. "MAzR:1").
+         * @param cmdNeg   Protocol command for negative direction (e.g. "MAzL:1").
+         * @return IPS_BUSY on success, IPS_ALERT on error.
+         */
+        IPState sendRelativeMove(double degrees, const char *cmdPos, const char *cmdNeg);
+
+        void hexDump(char *buf, const char *data, int size);
+
+        ///////////////////////////////////////////////////////////////////////////////
+        /// Telemetry / status tracking
+        ///////////////////////////////////////////////////////////////////////////////
+        /** @brief Update ManualAdjustmentNP state based on m_IsMoving. Called from TimerHit. */
+        void checkMotionComplete();
+
+        ///////////////////////////////////////////////////////////////////////////////
+        /// Driver properties
+        ///////////////////////////////////////////////////////////////////////////////
+
+        // ── Main Control tab ──────────────────────────────────────────────
+        /// Current machine state (READY / MOVING / HOMING / …)
+        INDI::PropertyText StatusTP {1};
+
+        /// WiFi connection indicator (read-only)
+        INDI::PropertyLight WiFiLP {1};
+
+        /// Homed indicator (read-only)
+        INDI::PropertyLight HomedLP {1};
+
+        // ── Options tab ───────────────────────────────────────────────────
+        /// Azimuth soft limits [min, max] in degrees
+        INDI::PropertyNumber AzSoftLimitsNP {2};
+        enum { AZ_LIMIT_MIN, AZ_LIMIT_MAX };
+
+        /// Altitude soft limits [min, max] in degrees
+        INDI::PropertyNumber AltSoftLimitsNP {2};
+        enum { ALT_LIMIT_MIN, ALT_LIMIT_MAX };
+
+        /// Altitude overshoot routine master enable (Over:X)
+        INDI::PropertySwitch AltOvershootSP {2};
+        enum { ALT_OVERSHOOT_ENABLED, ALT_OVERSHOOT_DISABLED };
+
+        /// Altitude overshoot per-direction enable (OvUp:X, OvDn:X)
+        INDI::PropertySwitch AltOvershootDirSP {2};
+        enum { ALT_OVERSHOOT_UP, ALT_OVERSHOOT_DOWN };
+
+        /// Altitude overshoot amount in degrees (OvD/OvM/OvS)
+        INDI::PropertyNumber AltOvershootAmountNP {1};
+
+        // ── Correction tab ────────────────────────────────────────────────
+        // Driver-side (client) correction shaping, mirroring MLAstro's N.I.N.A.
+        // implementation: the requested AZ/ALT correction is scaled by a safety
+        // factor, and optionally the altitude axis applies 100% of the error and
+        // then travels an overshoot distance past the target so it always settles
+        // from the same direction.
+
+        /// Correction percentage applied to every requested AZ/ALT correction (%).
+        /// Default 75, range 1-100.
+        INDI::PropertyNumber CorrectionPercentNP {1};
+
+        /// Master "Enable overshoot" for the Alt software-overshoot routine.
+        INDI::PropertySwitch CorrectionOvershootSP {2};
+        enum { CORR_OVERSHOOT_ENABLED, CORR_OVERSHOOT_DISABLED };
+
+        /// Per-direction overshoot enable ("Run overshoot for moving Up / Down").
+        INDI::PropertySwitch CorrectionOvershootDirSP {2};
+        enum { CORR_OVERSHOOT_UP, CORR_OVERSHOOT_DOWN };
+
+        /// Distance travelled past the target when overshooting (arcmin, 0-240).
+        INDI::PropertyNumber CorrectionOvershootAmountNP {1};
+
+        // ── Motor Config tab ──────────────────────────────────────────────
+        /// Azimuth motor configuration (9 parameters)
+        INDI::PropertyNumber AzMotorNP {9};
+        enum
+        {
+            AZ_RUN_CURRENT,   ///< AzIR – Run current in mA
+            AZ_HOLD_CURRENT,  ///< AzIH – Hold current in mA
+            AZ_MICROSTEPS,    ///< AzMS – Microsteps (8/16/32/64)
+            AZ_ACCEL,         ///< AzAc – Acceleration
+            AZ_DECEL,         ///< AzDec – Deceleration
+            AZ_STEPS_PER_DEG, ///< AzSD – Steps per degree
+            AZ_START_BOOST,   ///< AzSB – Startup booster (%)
+            AZ_COOL_STEP,     ///< AzSC – Soft CoolStep (%)
+            AZ_RUN_MODE,      ///< AzRM – Run mode (0=StealthChop, 1=SpreadCycle)
+        };
+
+        /// Altitude motor configuration (9 parameters)
+        INDI::PropertyNumber AltMotorNP {9};
+        enum
+        {
+            ALT_RUN_CURRENT,
+            ALT_HOLD_CURRENT,
+            ALT_MICROSTEPS,
+            ALT_ACCEL,
+            ALT_DECEL,
+            ALT_STEPS_PER_DEG,
+            ALT_START_BOOST,
+            ALT_COOL_STEP,
+            ALT_RUN_MODE,
+        };
+
+        /// Save settings to FRAM and reboot the controller
+        INDI::PropertySwitch SaveRebootSP {1};
+
+        // ── Network tab ──────────────────────────────────────────────────
+        /// Station (WiFi client) SSID. Written to the controller's memory only;
+        /// requires Save & Reboot to persist across power cycles.
+        INDI::PropertyText StationSSIDTP {1};
+
+        /// Station (WiFi client) password. Write-only: the driver never reads
+        /// it back and never persists it to the local config file.
+        INDI::PropertyText StationPasswordTP {1};
+
+        /// Access Point (hotspot) SSID and IP address.
+        INDI::PropertyText APConfigTP {2};
+        enum { AP_SSID, AP_IP };
+
+        /// Access Point password. Write-only: the driver never reads it back
+        /// and never persists it to the local config file.
+        INDI::PropertyText APPasswordTP {1};
+
+        // ── Info tab ──────────────────────────────────────────────────────
+        /// Firmware version and controller serial number, captured from the handshake
+        /// reply (ok,firmware X.Y.Z,SN:AA:BB:CC:DD:EE:F0). Older firmware only replies
+        /// "ok" with no version/serial, in which case this stays empty.
+        INDI::PropertyText FirmwareInfoTP {2};
+        enum { FIRMWARE_VERSION, FIRMWARE_SERIAL };
+
+        /// WiFi / network information (read-only)
+        INDI::PropertyText WiFiInfoTP {6};
+        enum { WIFI_INFO_AP_SSID, WIFI_INFO_AP_IP, WIFI_INFO_AP_MAC,
+               WIFI_INFO_STA_SSID, WIFI_INFO_STA_IP, WIFI_INFO_STA_MAC };
+
+        ///////////////////////////////////////////////////////////////////////////////
+        /// Internal state
+        ///////////////////////////////////////////////////////////////////////////////
+        bool m_IsMoving        {false};   ///< True while an axis is in motion.
+        bool m_IsHoming        {false};   ///< True while returning to home.
+        bool m_IsHomed         {false};   ///< True when a home position is set.
+
+        /// Guards the one-time informational log of the device's backlash state.
+        bool m_BacklashLogged  {false};
+
+        /// Latest OvD/OvM/OvS telemetry pieces, combined into AltOvershootAmountNP.
+        double m_OvshD {0}, m_OvshM {0}, m_OvshS {0};
+
+        int  PortFD            {-1};
+        Connection::Serial *serialConnection {nullptr};
+
+        ///////////////////////////////////////////////////////////////////////////////
+        /// Constants
+        ///////////////////////////////////////////////////////////////////////////////
+        static constexpr uint8_t  DRIVER_TIMEOUT   {5};     ///< Serial timeout in seconds.
+        static constexpr uint16_t DRIVER_LEN        {2048};  ///< Max response buffer size.
+        static constexpr char     DRIVER_STOP_CHAR  {'\n'};  ///< Response terminator.
+        static constexpr const char *MOTOR_CONFIG_TAB {"Motor Config"};
+        static constexpr const char *NETWORK_TAB      {"Network"};
+        static constexpr const char *INFO_TAB         {"Info"};
+        static constexpr const char *CORRECTION_TAB   {"Correction"};
+};

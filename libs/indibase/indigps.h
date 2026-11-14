@@ -25,6 +25,7 @@
 #pragma once
 
 #include "defaultdevice.h"
+#include "indigpsinterface.h"
 
 /**
  * \class GPS
@@ -44,17 +45,10 @@
 namespace INDI
 {
 
-class GPS : public DefaultDevice
+class GPS : public DefaultDevice, public GPSInterface
 {
     public:
-        enum GPSLocation
-        {
-            LOCATION_LATITUDE,
-            LOCATION_LONGITUDE,
-            LOCATION_ELEVATION
-        };
-
-        GPS() = default;
+        GPS();
         virtual ~GPS() = default;
 
         virtual bool initProperties() override;
@@ -63,16 +57,6 @@ class GPS : public DefaultDevice
         virtual bool ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n) override;
 
     protected:
-        /**
-             * @brief updateGPS Retrieve Location & Time from GPS. Update LocationNP & TimeTP properties (value and state) without sending them to the client (i.e. IDSetXXX).
-             * @return Return overall state. The state should be IPS_OK if data is valid. IPS_BUSY if GPS fix is in progress. IPS_ALERT is there is an error. The clients will only accept values with IPS_OK state.
-             */
-        virtual IPState updateGPS();
-
-        /**
-             * @brief TimerHit Keep calling updateGPS() until it is successfull, if it fails upon first connection.
-             */
-        virtual void TimerHit() override;
 
         /**
          * @brief saveConfigItems Save refresh period
@@ -80,23 +64,5 @@ class GPS : public DefaultDevice
          * @return True if all is OK
          */
         virtual bool saveConfigItems(FILE *fp) override;
-
-        //  A number vector that stores lattitude and longitude
-        INumberVectorProperty LocationNP;
-        INumber LocationN[3];
-
-        // UTC and UTC Offset
-        IText TimeT[2] {};
-        ITextVectorProperty TimeTP;
-
-        // Refresh data
-        ISwitch RefreshS[1];
-        ISwitchVectorProperty RefreshSP;
-
-        // Refresh Period
-        INumber PeriodN[1];
-        INumberVectorProperty PeriodNP;
-
-        int timerID = -1;
 };
 }

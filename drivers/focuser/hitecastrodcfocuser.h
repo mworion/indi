@@ -20,7 +20,12 @@
 
 #pragma once
 
-#include "hidapi.h"
+#ifdef _USE_SYSTEM_HIDAPILIB
+#include <hidapi/hidapi.h>
+#else
+#include <indi_hidapi.h>
+#endif
+
 #include "indifocuser.h"
 #include "indiusbdevice.h"
 
@@ -62,8 +67,7 @@ class HitecAstroDCFocuser : public INDI::Focuser, public INDI::USBDevice
         //        INumber MaxPositionN[1];
         //        INumberVectorProperty MaxPositionNP;
 
-        INumber SlewSpeedN[1];
-        INumberVectorProperty SlewSpeedNP;
+        INDI::PropertyNumber SlewSpeedNP {1};
 
         //        ISwitch ReverseDirectionS[1];
         //        ISwitchVectorProperty ReverseDirectionSP;

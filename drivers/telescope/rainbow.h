@@ -63,6 +63,8 @@ class Rainbow : public INDI::Telescope, public INDI::GuiderInterface
         virtual bool SetSlewRate(int index) override;
         // Syncing
         virtual bool Sync(double ra, double dec) override;
+        // Home
+        virtual IPState ExecuteHomeAction(TelescopeHomeAction action) override;
 
         // RA/DE
         bool getRA();
@@ -86,6 +88,7 @@ class Rainbow : public INDI::Telescope, public INDI::GuiderInterface
         ///////////////////////////////////////////////////////////////////////////////
         void getStartupStatus();
         bool getFirmwareVersion();
+        TelescopePierSide getSideOfPier();
 
         ///////////////////////////////////////////////////////////////////////////////
         /// Location & Time
@@ -156,9 +159,6 @@ class Rainbow : public INDI::Telescope, public INDI::GuiderInterface
         ///////////////////////////////////////////////////////////////////////////////////
         /// Properties
         ///////////////////////////////////////////////////////////////////////////////////
-        ISwitchVectorProperty HomeSP;
-        ISwitch HomeS[1];
-
         ISwitchVectorProperty SaveAlignBeforeSyncSP;
         ISwitch SaveAlignBeforeSyncS[2];
         enum { STAR_ALIGNMENT_DISABLED, STAR_ALIGNMENT_ENABLED};
@@ -207,6 +207,6 @@ class Rainbow : public INDI::Telescope, public INDI::GuiderInterface
         static const char DRIVER_STOP_CHAR { 0x23 };
         // Wait up to a maximum of 3 seconds for serial input
         static constexpr const uint8_t DRIVER_TIMEOUT {3};
-        // Maximum buffer for sending/receving.
+        // Maximum buffer for sending/receiving.
         static constexpr const uint8_t DRIVER_LEN {64};
 };

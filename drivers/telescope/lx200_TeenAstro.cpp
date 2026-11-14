@@ -56,16 +56,16 @@ extern std::mutex lx200CommsLock;
 /*
  * LX200 TeenAstro constructor
  */
-LX200_TeenAstro::LX200_TeenAstro()
+LX200_TeenAstro::LX200_TeenAstro() : GI(this)
 {
-    setVersion(1, 3);           // don't forget to update drivers.xml
+    setVersion(1, 4);           // don't forget to update drivers.xml
 
     DBG_SCOPE = INDI::Logger::getInstance().addDebugLevel("Scope Verbose", "SCOPE");
 
     SetTelescopeCapability(
         TELESCOPE_CAN_GOTO | TELESCOPE_CAN_SYNC | TELESCOPE_CAN_PARK | TELESCOPE_CAN_ABORT |
         TELESCOPE_HAS_TIME | TELESCOPE_HAS_LOCATION | TELESCOPE_HAS_PIER_SIDE |
-        TELESCOPE_HAS_TRACK_MODE  | TELESCOPE_CAN_CONTROL_TRACK);
+        TELESCOPE_HAS_TRACK_MODE  | TELESCOPE_CAN_CONTROL_TRACK, 5);
 
     LOG_DEBUG("Initializing from LX200 TeenAstro device...");
 }
@@ -121,7 +121,7 @@ bool LX200_TeenAstro::initProperties()
     IUFillNumber(&GuideRateN[0], "Guide Rate", "value", "%.2f", 0.0, 1.0, 0.1, INITIAL_GUIDE_RATE);
     IUFillNumberVector(&GuideRateNP, GuideRateN, 1, getDeviceName(), "TELESCOPE_GUIDE_RATE", "Guide Rate",
                        GUIDE_TAB, IP_RW, 0, IPS_IDLE);
-    initGuiderProperties(getDeviceName(), GUIDE_TAB);
+    GI::initProperties(GUIDE_TAB);
 
     // ============== OPTIONS_TAB
     // Slew threshold
@@ -182,15 +182,11 @@ bool LX200_TeenAstro::updateProperties()
         defineProperty(&GuideRateNP);
 
         // Site Management
-        defineProperty(&ParkOptionSP);
+        defineProperty(ParkOptionSP);
         defineProperty(&SetHomeSP);
 
         defineProperty(&SiteSP);
         defineProperty(&SiteNameTP);
-
-        // Guide
-        defineProperty(&GuideNSNP);
-        defineProperty(&GuideWENP);
 
         // Firmware Data
         defineProperty(&VersionTP);
@@ -210,14 +206,14 @@ bool LX200_TeenAstro::updateProperties()
         deleteProperty(SiteNameTP.name);
 
         // Site Management
-        deleteProperty(ParkOptionSP.name);
+        deleteProperty(ParkOptionSP);
         deleteProperty(SetHomeSP.name);
-        // Guide
-        deleteProperty(GuideNSNP.name);
-        deleteProperty(GuideWENP.name);
         // Firmware Data
         deleteProperty(VersionTP.name);
     }
+
+    GI::updateProperties();
+
     return true;
 }
 
@@ -255,7 +251,7 @@ bool LX200_TeenAstro::ReadScopeStatus()
 
     if (getLX200RA(PortFD, &currentRA) < 0 || getLX200DEC(PortFD, &currentDEC) < 0)
     {
-        EqNP.s = IPS_ALERT;
+        EqNP.setState(IPS_ALERT);
         return false;
     }
 
@@ -274,7 +270,7 @@ bool LX200_TeenAstro::ReadScopeStatus()
     }
 
     // update mount status
-    getCommandString(PortFD, OSStat, statusCommand);       // returns a string containg controller status
+    getCommandString(PortFD, OSStat, statusCommand);       // returns a string containing controller status
     if (OSStat[15] != '0')
     {
         updateMountStatus(OSStat[15]);              // error
@@ -403,30 +399,34 @@ bool LX200_TeenAstro::Goto(double r, double d)
     fs_sexa(DecStr, targetDEC, 2, 3600);
 
     // If moving, let's stop it first.
-    if (EqNP.s == IPS_BUSY)
+    if (EqNP.getState() == IPS_BUSY)
     {
         if (!isSimulation() && abortSlew(PortFD) < 0)
         {
-            AbortSP.s = IPS_ALERT;
-            IDSetSwitch(&AbortSP, "Abort slew failed.");
+            AbortSP.setState(IPS_ALERT);
+            LOG_ERROR("Abort slew failed.");
+            AbortSP.apply();
             return false;
         }
 
-        AbortSP.s = IPS_OK;
-        EqNP.s    = IPS_IDLE;
-        IDSetSwitch(&AbortSP, "Slew aborted.");
-        IDSetNumber(&EqNP, nullptr);
+        AbortSP.setState(IPS_OK);
+        EqNP.setState(IPS_IDLE);
+        LOG_ERROR("Slew aborted.");
+        AbortSP.apply();
+        EqNP.apply();
 
         // sleep for 100 mseconds
-        usleep(100000);
+        const struct timespec ms100_delay = {.tv_sec = 0, .tv_nsec = 100000000};
+        nanosleep(&ms100_delay, NULL);
     }
 
     if (!isSimulation())
     {
         if (setObjectRA(PortFD, targetRA) < 0 || (setObjectDEC(PortFD, targetDEC)) < 0)  // standard LX200 command
         {
-            EqNP.s = IPS_ALERT;
-            IDSetNumber(&EqNP, "Error setting RA/DEC.");
+            EqNP.setState(IPS_ALERT);
+            LOG_ERROR("Error setting RA/DEC.");
+            EqNP.apply();
             return false;
         }
 
@@ -435,15 +435,16 @@ bool LX200_TeenAstro::Goto(double r, double d)
         /* Slew reads the '0', that is not the end of the slew */
         if ((err = Slew(PortFD)))
         {
-            EqNP.s = IPS_ALERT;
-            IDSetNumber(&EqNP, "Error Slewing to JNow RA %s - DEC %s\n", RAStr, DecStr);
+            EqNP.setState(IPS_ALERT);
+            LOGF_ERROR("Error Slewing to JNow RA %s - DEC %s\n", RAStr, DecStr);
+            EqNP.apply();
             slewError(err);
             return false;
         }
     }
 
     TrackState = SCOPE_SLEWING;
-    EqNP.s     = IPS_BUSY;
+    EqNP.setState(IPS_BUSY);
 
     LOGF_INFO("Slewing to RA: %s - DEC: %s", RAStr, DecStr);
     return true;
@@ -476,16 +477,18 @@ bool LX200_TeenAstro::Sync(double ra, double dec)
     // goto target
     if (!isSimulation() && (setObjectRA(PortFD, ra) < 0 || (setObjectDEC(PortFD, dec)) < 0))
     {
-        EqNP.s = IPS_ALERT;
-        IDSetNumber(&EqNP, "Error setting RA/DEC. Unable to Sync.");
+        EqNP.setState(IPS_ALERT);
+        LOG_ERROR("Error setting RA/DEC. Unable to Sync.");
+        EqNP.apply();
         return false;
     }
 
     // Use the parent Sync() function (lx200driver.cpp)
     if (!isSimulation() && ::Sync(PortFD, syncString) < 0)
     {
-        EqNP.s = IPS_ALERT;
-        IDSetNumber(&EqNP, "Synchronization failed.");
+        EqNP.setState(IPS_ALERT);
+        LOG_ERROR("Synchronization failed");
+        EqNP.apply();
         return false;
     }
 
@@ -493,7 +496,7 @@ bool LX200_TeenAstro::Sync(double ra, double dec)
     currentDEC = dec;
 
     LOG_INFO("Synchronization successful.");
-    EqNP.s     = IPS_OK;
+    EqNP.setState(IPS_OK);
     NewRaDec(currentRA, currentDEC);
 
     return true;
@@ -519,7 +522,7 @@ bool LX200_TeenAstro::SetCurrentPark()
     }
     SetAxis1Park(currentRA);
     SetAxis2Park(currentDEC);
-    LOG_WARN("Park Value set to current postion");
+    LOG_WARN("Park Value set to current position");
     return true;
 }
 
@@ -531,7 +534,7 @@ bool LX200_TeenAstro::UnPark()
     {
         LOG_DEBUG("UnPark: CMD <:hR>");
         TrackState = SCOPE_IDLE;
-        EqNP.s    = IPS_OK;
+        EqNP.setState(IPS_OK);
         return true;
     }
     if (getCommandString(PortFD, response, ":hR#") < 0)
@@ -549,43 +552,46 @@ bool LX200_TeenAstro::Park()
     {
         LOG_DEBUG("SlewToPark: CMD <:hP>");
         TrackState = SCOPE_PARKED;
-        EqNP.s    = IPS_OK;
+        EqNP.setState(IPS_OK);
         return true;
     }
 
     // If scope is moving, let's stop it first.
-    if (EqNP.s == IPS_BUSY)
+    if (EqNP.getState() == IPS_BUSY)
     {
         if (abortSlew(PortFD) < 0)
         {
-            Telescope::AbortSP.s = IPS_ALERT;
-            IDSetSwitch(&(Telescope::AbortSP), "Abort slew failed.");
+            Telescope::AbortSP.setState(IPS_ALERT);
+            LOG_ERROR("Abort slew failed.");
+            Telescope::AbortSP.apply();
             return false;
         }
-        Telescope::AbortSP.s = IPS_OK;
-        EqNP.s    = IPS_IDLE;
-        IDSetSwitch(&(Telescope::AbortSP), "Slew aborted.");
-        IDSetNumber(&EqNP, nullptr);
+        Telescope::AbortSP.setState(IPS_OK);
+        EqNP.setState(IPS_IDLE);
+        LOG_ERROR("Slew aborted.");
+        Telescope::AbortSP.apply();
+        EqNP.apply();
 
-        if (MovementNSSP.s == IPS_BUSY || MovementWESP.s == IPS_BUSY)
+        if (MovementNSSP.getState() == IPS_BUSY || MovementWESP.getState() == IPS_BUSY)
         {
-            MovementNSSP.s = IPS_IDLE;
-            MovementWESP.s = IPS_IDLE;
-            EqNP.s = IPS_IDLE;
-            IUResetSwitch(&MovementNSSP);
-            IUResetSwitch(&MovementWESP);
+            MovementNSSP.setState(IPS_IDLE);
+            MovementWESP.setState(IPS_IDLE);
+            EqNP.setState(IPS_IDLE);
+            MovementNSSP.reset();
+            MovementWESP.reset();
 
-            IDSetSwitch(&MovementNSSP, nullptr);
-            IDSetSwitch(&MovementWESP, nullptr);
+            MovementNSSP.apply();
+            MovementWESP.apply();
         }
     }
     if (slewToPark(PortFD) < 0)  // slewToPark is a macro (lx200driver.h)
     {
-        ParkSP.s = IPS_ALERT;
-        IDSetSwitch(&ParkSP, "Parking Failed.");
+        ParkSP.setState(IPS_ALERT);
+        LOG_ERROR("Parking Failed.");
+        ParkSP.apply();
         return false;
     }
-    ParkSP.s   = IPS_BUSY;
+    ParkSP.setState(IPS_BUSY);
     TrackState = SCOPE_PARKING;
     LOG_INFO("Parking is in progress...");
 
@@ -707,6 +713,10 @@ void LX200_TeenAstro::getBasicData()
  */
 bool LX200_TeenAstro::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
 {
+    // Check guider interface
+    if (GI::processNumber(dev, name, values, names, n))
+        return true;
+
     if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
     {
         if (!strcmp(name, SlewAccuracyNP.name))
@@ -730,15 +740,10 @@ bool LX200_TeenAstro::ISNewNumber(const char *dev, const char *name, double valu
             float guideRate = GuideRateN[0].value;
             SetGuideRate(guideRate);
         }
-
-        // GUIDE process Guider properties.
-        processGuiderProperties(name, values, names, n);
     }
 
     return INDI::Telescope::ISNewNumber(dev, name, values, names, n);
 }
-
-
 
 /*
  * ISNewSwitch: callback from user interface
@@ -748,7 +753,6 @@ bool LX200_TeenAstro::ISNewNumber(const char *dev, const char *name, double valu
  */
 bool LX200_TeenAstro::ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n)
 {
-
     if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
     {
         // Slew button speed
@@ -911,7 +915,7 @@ bool LX200_TeenAstro::sendScopeTime()
     {
         char utcStr[8] = {0};
         snprintf(utcStr, sizeof(utcStr), "%.2f", offset);
-        IUSaveText(&TimeT[1], utcStr);
+        TimeTP[OFFSET].setText(utcStr);
     }
     else
     {
@@ -954,14 +958,14 @@ bool LX200_TeenAstro::sendScopeTime()
 
     // Format it into the final UTC ISO 8601
     strftime(cdate, MAXINDINAME, "%Y-%m-%dT%H:%M:%S", &utm);
-    IUSaveText(&TimeT[0], cdate);
+    TimeTP[UTC].setText(cdate);
 
-    LOGF_DEBUG("Mount controller UTC Time: %s", TimeT[0].text);
-    LOGF_DEBUG("Mount controller UTC Offset: %s", TimeT[1].text);
+    LOGF_DEBUG("Mount controller UTC Time: %s", TimeTP[UTC].getText());
+    LOGF_DEBUG("Mount controller UTC Offset: %s", TimeTP[OFFSET].getText());
 
     // Let's send everything to the client
-    TimeTP.s = IPS_OK;
-    IDSetText(&TimeTP, nullptr);
+    TimeTP.setState(IPS_OK);
+    TimeTP.apply();
 
     return true;
 }
@@ -979,11 +983,11 @@ bool LX200_TeenAstro::sendScopeLocation()
 
     if (isSimulation())
     {
-        LocationNP.np[LOCATION_LATITUDE].value = 29.5;  // Kuwait - Jasem's home!
-        LocationNP.np[LOCATION_LONGITUDE].value = 48.0;
-        LocationNP.np[LOCATION_ELEVATION].value = 10;
-        LocationNP.s           = IPS_OK;
-        IDSetNumber(&LocationNP, nullptr);
+        LocationNP[LOCATION_LATITUDE].setValue(9.5);  // Kuwait - Jasem's home!
+        LocationNP[LOCATION_LONGITUDE].setValue(48.0);
+        LocationNP[LOCATION_ELEVATION].setValue(10);
+        LocationNP.setState(IPS_OK);
+        LocationNP.apply();
         return true;
     }
 
@@ -995,9 +999,9 @@ bool LX200_TeenAstro::sendScopeLocation()
     else
     {
         if (dd > 0)
-            LocationNP.np[LOCATION_LATITUDE].value = dd + mm / 60.0;
+            LocationNP[LOCATION_LATITUDE].setValue(dd + mm / 60.0);
         else
-            LocationNP.np[LOCATION_LATITUDE].value = dd - mm / 60.0;
+            LocationNP[LOCATION_LATITUDE].setValue(dd - mm / 60.0);
     }
     if (getSiteLongitude(PortFD, &dd, &mm, &ssf) < 0)
     {
@@ -1007,22 +1011,22 @@ bool LX200_TeenAstro::sendScopeLocation()
     else
     {
         if (dd > 0)
-            LocationNP.np[LOCATION_LONGITUDE].value = 360.0 - (dd + mm / 60.0);
+            LocationNP[LOCATION_LONGITUDE].setValue(360.0 - (dd + mm / 60.0));
         else
-            LocationNP.np[LOCATION_LONGITUDE].value = (dd - mm / 60.0) * -1.0;
+            LocationNP[LOCATION_LONGITUDE].setValue((dd - mm / 60.0) * -1.0);
     }
-    LOGF_DEBUG("Mount Controller Latitude: %g Longitude: %g", LocationN[LOCATION_LATITUDE].value,
-               LocationN[LOCATION_LONGITUDE].value);
+    LOGF_DEBUG("Mount Controller Latitude: %g Longitude: %g", LocationNP[LOCATION_LATITUDE].getValue(),
+               LocationNP[LOCATION_LONGITUDE].getValue());
 
     if (getSiteElevation(&elev))
     {
-        LocationNP.np[LOCATION_ELEVATION].value = elev;
+        LocationNP[LOCATION_ELEVATION].setValue(elev);
     }
     else
     {
         LOG_ERROR("Error getting site elevation");
     }
-    IDSetNumber(&LocationNP, nullptr);
+    LocationNP.apply();
     saveConfig(true, "GEOGRAPHIC_COORD");
 
     return true;
@@ -1101,9 +1105,9 @@ bool LX200_TeenAstro::getLocation()
     else
     {
         if (dd > 0)
-            LocationNP.np[LOCATION_LATITUDE].value = dd + mm / 60.0;
+            LocationNP[LOCATION_LATITUDE].setValue(dd + mm / 60.0);
         else
-            LocationNP.np[LOCATION_LATITUDE].value = dd - mm / 60.0;
+            LocationNP[LOCATION_LATITUDE].setValue(dd - mm / 60.0);
     }
 
     if (getSiteLongitude(PortFD, &dd, &mm, &ssf) < 0)
@@ -1114,20 +1118,20 @@ bool LX200_TeenAstro::getLocation()
     else
     {
         if (dd > 0)
-            LocationNP.np[LOCATION_LONGITUDE].value = 360.0 - (dd + mm / 60.0);
+            LocationNP[LOCATION_LONGITUDE].setValue(360.0 - (dd + mm / 60.0));
         else
-            LocationNP.np[LOCATION_LONGITUDE].value = (dd - mm / 60.0) * -1.0;
+            LocationNP[LOCATION_LONGITUDE].setValue((dd - mm / 60.0) * -1.0);
     }
     if (getSiteElevation(&elev))
     {
-        LocationNP.np[LOCATION_ELEVATION].value = elev;
+        LocationNP[LOCATION_ELEVATION].setValue(elev);
     }
     else
     {
         LOG_ERROR("Error getting site elevation");
     }
 
-    IDSetNumber(&LocationNP, nullptr);
+    LocationNP.apply();
     return true;
 }
 
@@ -1151,25 +1155,65 @@ bool LX200_TeenAstro::SetGuideRate(float guideRate)
 IPState LX200_TeenAstro::GuideNorth(uint32_t ms)
 {
     SendPulseCmd(LX200_NORTH, ms);
-    return IPS_OK;
+    if(MovementNSSP.getState() == IPS_BUSY)
+        return IPS_ALERT;
+
+    if (GuideNSTID)
+    {
+        IERmTimer(GuideNSTID);
+        GuideNSTID = 0;
+    }
+
+    GuideNSTID = IEAddTimer(static_cast<int>(ms), guideTimeoutHelperNS, this);
+    return IPS_BUSY;
 }
 
 IPState LX200_TeenAstro::GuideSouth(uint32_t ms)
 {
     SendPulseCmd(LX200_SOUTH, ms);
-    return IPS_OK;
+    if(MovementNSSP.getState() == IPS_BUSY)
+        return IPS_ALERT;
+
+    if (GuideNSTID)
+    {
+        IERmTimer(GuideNSTID);
+        GuideNSTID = 0;
+    }
+
+    GuideNSTID = IEAddTimer(static_cast<int>(ms), guideTimeoutHelperNS, this);
+    return IPS_BUSY;
 }
 
 IPState LX200_TeenAstro::GuideEast(uint32_t ms)
 {
     SendPulseCmd(LX200_EAST, ms);
-    return IPS_OK;
+    if(MovementWESP.getState() == IPS_BUSY)
+        return IPS_ALERT;
+
+    if (GuideWETID)
+    {
+        IERmTimer(GuideWETID);
+        GuideWETID = 0;
+    }
+
+    GuideWETID = IEAddTimer(static_cast<int>(ms), guideTimeoutHelperWE, this);
+    return IPS_BUSY;
 }
 
 IPState LX200_TeenAstro::GuideWest(uint32_t ms)
 {
     SendPulseCmd(LX200_WEST, ms);
-    return IPS_OK;
+    if(MovementWESP.getState() == IPS_BUSY)
+        return IPS_ALERT;
+
+    if (GuideWETID)
+    {
+        IERmTimer(GuideWETID);
+        GuideWETID = 0;
+    }
+
+    GuideWETID = IEAddTimer(static_cast<int>(ms), guideTimeoutHelperWE, this);
+    return IPS_BUSY;
 }
 
 void LX200_TeenAstro::SendPulseCmd(int8_t direction, uint32_t duration_msec)
@@ -1189,9 +1233,9 @@ bool LX200_TeenAstro::Abort()
         return false;
     }
 
-    EqNP.s     = IPS_IDLE;
+    EqNP.setState(IPS_IDLE);
     TrackState = SCOPE_IDLE;
-    IDSetNumber(&EqNP, nullptr);
+    EqNP.apply();
 
     LOG_INFO("Slew aborted.");
     return true;
@@ -1264,7 +1308,7 @@ void LX200_TeenAstro::mountSim()
     ltv = tv;
     da  = SLEWRATE * dt;
 
-    /* Process per current state. We check the state of EQUATORIAL_COORDS and act acoordingly */
+    /* Process per current state. We check the state of EQUATORIAL_COORDS and act accordingly */
     switch (TrackState)
     {
         case SCOPE_TRACKING:
@@ -1315,14 +1359,23 @@ void LX200_TeenAstro::mountSim()
 
 void LX200_TeenAstro::slewError(int slewCode)
 {
-    EqNP.s = IPS_ALERT;
+    EqNP.setState(IPS_ALERT);
 
     if (slewCode == 1)
-        IDSetNumber(&EqNP, "Object below horizon.");
+    {
+        LOG_INFO("Object below horizon");
+        EqNP.apply();
+    }
     else if (slewCode == 2)
-        IDSetNumber(&EqNP, "Object below the minimum elevation limit.");
+    {
+        LOG_INFO("Object below the minimum elevation limit.");
+        EqNP.apply();
+    }
     else
-        IDSetNumber(&EqNP, "Slew failed.");
+    {
+        LOG_ERROR("Slew failed.");
+        EqNP.apply();
+    }
 }
 /*
  *  Enable or disable sidereal tracking (events handled by inditelescope)
@@ -1370,5 +1423,30 @@ void LX200_TeenAstro::sendCommand(const char *cmd)
     INDI_UNUSED(rc);
 }
 
+void LX200_TeenAstro::guideTimeoutHelperNS(void * p)
+{
+    static_cast<LX200_TeenAstro *>(p)->guideTimeoutNS();
+}
 
+void LX200_TeenAstro::guideTimeoutHelperWE(void * p)
+{
+    static_cast<LX200_TeenAstro *>(p)->guideTimeoutWE();
+}
 
+void LX200_TeenAstro::guideTimeoutNS()
+{
+    GuideNSNP[0].setValue(0);
+    GuideNSNP[1].setValue(0);
+    GuideNSNP.setState(IPS_IDLE);
+    GuideNSTID = 0;
+    GuideNSNP.apply();
+}
+
+void LX200_TeenAstro::guideTimeoutWE()
+{
+    GuideWENP[0].setValue(0);
+    GuideWENP[1].setValue(0);
+    GuideWENP.setState(IPS_IDLE);
+    GuideWETID = 0;
+    GuideWENP.apply();
+}

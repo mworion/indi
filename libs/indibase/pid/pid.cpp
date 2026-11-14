@@ -43,9 +43,10 @@ class PIDImpl
             m_Tau = value;
         }
         double calculate( double setpoint, double measurement );
-        double propotionalTerm() const
+        void reset();
+        double proportionalTerm() const
         {
-            return m_PropotionalTerm;
+            return m_ProportionalTerm;
         }
         double integralTerm() const
         {
@@ -54,6 +55,25 @@ class PIDImpl
         double derivativeTerm() const
         {
             return m_DerivativeTerm;
+        }
+
+        void setKp(double Kp)
+        {
+            m_Kp = Kp;
+        }
+        void setKi(double Ki)
+        {
+            m_Ki = Ki;
+        }
+        void setKd(double Kd)
+        {
+            m_Kd = Kd;
+        }
+        void getGains(double &Kp, double &Ki, double &Kd) const
+        {
+            Kp = m_Kp;
+            Ki = m_Ki;
+            Kd = m_Kd;
         }
 
     private:
@@ -80,7 +100,7 @@ class PIDImpl
         double m_PreviousMeasurement {0};
 
         // Terms
-        double m_PropotionalTerm {0};
+        double m_ProportionalTerm {0};
         double m_IntegralTerm {0};
         double m_DerivativeTerm {0};
 
@@ -103,9 +123,13 @@ double PID::calculate( double setpoint, double pv )
 {
     return pimpl->calculate(setpoint, pv);
 }
-double PID::propotionalTerm() const
+void PID::reset()
 {
-    return pimpl->propotionalTerm();
+    pimpl->reset();
+}
+double PID::proportionalTerm() const
+{
+    return pimpl->proportionalTerm();
 }
 double PID::integralTerm() const
 {
@@ -115,6 +139,24 @@ double PID::derivativeTerm() const
 {
     return pimpl->derivativeTerm();
 }
+
+void PID::setKp(double Kp)
+{
+    pimpl->setKp(Kp);
+}
+void PID::setKi(double Ki)
+{
+    pimpl->setKi(Ki);
+}
+void PID::setKd(double Kd)
+{
+    pimpl->setKd(Kd);
+}
+void PID::getGains(double &Kp, double &Ki, double &Kd) const
+{
+    pimpl->getGains(Kp, Ki, Kd);
+}
+
 PID::~PID()
 {
     delete pimpl;
@@ -140,33 +182,52 @@ double PIDImpl::calculate(double setpoint, double measurement )
     double error = setpoint - measurement;
 
     // Proportional term
-    m_PropotionalTerm = m_Kp * error;
+    m_ProportionalTerm = m_Kp * error;
 
-    // Integral term
+    // Integral term (with trapezoidal integration)
     m_IntegralTerm = m_IntegralTerm + 0.5 * m_Ki * m_T * (error + m_PreviousError);
 
-    // Clamp Integral
-    if (m_IntegratorMin || m_IntegratorMax)
+    // Clamp Integral (anti-windup for integrator limits)
+    // Check if integrator limits are actually set (different from each other)
+    if (m_IntegratorMin != m_IntegratorMax)
         m_IntegralTerm = std::min(m_IntegratorMax, std::max(m_IntegratorMin, m_IntegralTerm));
 
-    // Derivative term (N.B. on measurement NOT error)
-    m_DerivativeTerm = -(2.0f * m_Kd * (measurement - m_PreviousMeasurement) + (2.0f * m_Tau - m_T) * m_DerivativeTerm)
-                       / (2.0f * m_Tau + m_T);
+    // Derivative term (N.B. on measurement NOT error to prevent derivative kick)
+    // Low-pass filtered derivative
+    m_DerivativeTerm = -(2.0 * m_Kd * (measurement - m_PreviousMeasurement) + (2.0 * m_Tau - m_T) * m_DerivativeTerm)
+                       / (2.0 * m_Tau + m_T);
 
     // Calculate total output
-    double output = m_PropotionalTerm + m_IntegralTerm + m_DerivativeTerm;
+    double output = m_ProportionalTerm + m_IntegralTerm + m_DerivativeTerm;
 
     // Clamp Output
+    double outputBeforeSaturation = output;
     output = std::min(m_Max, std::max(m_Min, output));
 
-    // Save error to previous error
+    // Anti-windup: Back-calculate integral if output is saturated
+    // This prevents integrator windup when output hits limits
+    if (output != outputBeforeSaturation && m_Ki != 0.0)
+    {
+        // Remove the last integral contribution that caused saturation
+        m_IntegralTerm = output - m_ProportionalTerm - m_DerivativeTerm;
+    }
+
+    // Save error and measurement for next iteration
     m_PreviousError = error;
     m_PreviousMeasurement = measurement;
 
     return output;
 }
 
+void PIDImpl::reset()
+{
+    m_PreviousError = 0.0;
+    m_PreviousMeasurement = 0.0;
+    m_IntegralTerm = 0.0;
+    m_DerivativeTerm = 0.0;
+    m_ProportionalTerm = 0.0;
+}
+
 PIDImpl::~PIDImpl()
 {
 }
-

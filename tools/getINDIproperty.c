@@ -57,8 +57,8 @@ typedef struct
     char *d;    /* device to seek */
     char *p;    /* property to seek */
     char *e;    /* element to seek */
-    int wc : 1; /* whether pattern uses wild cards */
-    int ok : 1; /* something matched this query */
+    char wc; /* whether pattern uses wild cards */
+    char ok; /* something matched this query */
 } SearchDef;
 static SearchDef *srchs; /* properties to look for */
 static int nsrchs;
@@ -588,7 +588,9 @@ static void oneBLOB(XMLEle *root, char *dev, char *nam, char *enam, char *p, int
     }
 
     /* rig up a file name from property name */
-    i = sprintf(fn, "%s.%s.%s%s", dev, nam, enam, format);
+    i = snprintf(fn, sizeof(fn), "%s.%s.%s%s", dev, nam, enam, format);
+    if (i >= (int)sizeof(fn))
+        i = sizeof(fn) - 1;
     if (isz)
         fn[i - 2] = '\0'; /* chop off .z */
 

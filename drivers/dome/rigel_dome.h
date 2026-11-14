@@ -21,7 +21,7 @@
 *******************************************************************************/
 #pragma once
 
-#include "indibase/indidome.h"
+#include "indidome.h"
 
 class RigelDome : public INDI::Dome
 {
@@ -65,6 +65,12 @@ class RigelDome : public INDI::Dome
         RigelMotorState m_rawMotorState {M_Idle};
         double targetAz { 0 };
 
+        // Pulsar Dome Drive workaround for stuck motor detection
+        double previousAngle { -1 };
+        int stuckAngleCounter { 0 };
+        static constexpr const int STUCK_THRESHOLD = 3;  // 3 consecutive cycles
+        static constexpr const double ANGLE_TOLERANCE = 1.0;  // 1 degree
+
         ///////////////////////////////////////////////////////////////////////////////
         /// Shutter Functions
         ///////////////////////////////////////////////////////////////////////////////
@@ -103,8 +109,7 @@ class RigelDome : public INDI::Dome
         ///////////////////////////////////////////////////////////////////////////////////
         /// Properties
         ///////////////////////////////////////////////////////////////////////////////////
-        ISwitchVectorProperty OperationSP;
-        ISwitch OperationS[2];
+        INDI::PropertySwitch OperationSP {2};
         enum
         {
             OPERATION_FIND_HOME,
@@ -112,8 +117,7 @@ class RigelDome : public INDI::Dome
         };
 
         // Info
-        ITextVectorProperty InfoTP;
-        IText InfoT[4] {};
+        INDI::PropertyText InfoTP {4};
         enum
         {
             INFO_FIRMWARE,
@@ -123,8 +127,7 @@ class RigelDome : public INDI::Dome
         };
 
         // Home angle
-        INumber HomePositionN[1];
-        INumberVectorProperty HomePositionNP;
+        INDI::PropertyNumber HomePositionNP {1};
 
         /////////////////////////////////////////////////////////////////////////////
         /// Static Helper Values
@@ -134,6 +137,6 @@ class RigelDome : public INDI::Dome
         static const char DRIVER_STOP_CHAR { 0x0D };
         // Wait up to a maximum of 3 seconds for serial input
         static constexpr const uint8_t DRIVER_TIMEOUT {3};
-        // Maximum buffer for sending/receving.
+        // Maximum buffer for sending/receiving.
         static constexpr const uint8_t DRIVER_LEN {64};
 };

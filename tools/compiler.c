@@ -48,7 +48,7 @@ enum
     NEG,
     NOT,
 
-    /* symantically operands, ie, constants, variables and all functions */
+    /* semantically operands, ie, constants, variables and all functions */
     CONST,
     VAR,
     ABS,
@@ -424,7 +424,7 @@ static int next_token()
     return (ERR);
 }
 
-/* return funtion token, else ERR.
+/* return function token, else ERR.
  * if find one, update cexpr too.
  */
 static int chk_funcs()
@@ -490,7 +490,7 @@ static void skip_double()
  * "look-ahead" token.
  * if error, fill in a message in err_msg[] and return ERR.
  */
-static int compile(prec) int prec;
+static int compile(int prec)
 {
     int expect_binop = 0; /* set after we have seen any operand.
 				 * used by SUB so it can tell if it really 
@@ -667,7 +667,7 @@ static int compile(prec) int prec;
  * if ok, return 0 and the final result,
  * else return -1 with a reason why not message in err_msg.
  */
-static int execute(result) double *result;
+static int execute(double *result)
 {
     int instr;
 
@@ -676,7 +676,7 @@ static int execute(result) double *result;
         instr = *pc++;
         switch (instr & OP_MASK)
         {
-            /* put these in numberic order so hopefully even the dumbest
+            /* put these in numeric order so hopefully even the dumbest
 	     * compiler will choose to use a jump table, not a cascade of ifs.
 	     */
             case HALT:
@@ -826,8 +826,7 @@ static int execute(result) double *result;
  * the only sanity check is the string contains two dots.
  * when return, leave lcexpr alone but move cexpr to just after the second '"'.
  */
-static int parse_fieldname(name, len) char name[];
-int len;
+static int parse_fieldname(char name[], int len)
 {
     char c    = '\0';
     int ndots = 0;
